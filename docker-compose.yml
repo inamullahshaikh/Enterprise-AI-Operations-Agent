@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relay"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  demo-db: # the "customer company" database the agent queries
+    image: postgres:16
+    environment:
+      POSTGRES_USER: acme
+      POSTGRES_PASSWORD: acme
+      POSTGRES_DB: acme
+    ports: ["5433:5432"]
+    volumes: ["./demo/seed:/docker-entrypoint-initdb.d"]
+
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+
+  minio: # S3-compatible storage for local dev
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["minio-data:/data"]
+
+  api:
+    build: ./backend
+    command: uvicorn relay_api.main:app --host 0.0.0.0 --port 8000 --reload
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
+      minio: { condition: service_started }
+    ports: ["8000:8000"]
+    volumes: ["./backend:/app"]
+
+  worker:
+    build: ./backend
+    command: celery -A relay_worker.app worker -Q agent,agent_resume,ingest,memory,eval,maintenance -c 4
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
+    volumes: ["./backend:/app"]
+
+  beat:
+    build: ./backend
+    command: celery -A relay_worker.app beat
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
+
+  sandbox:
+    build: ./sandbox
+    ports: ["8080:8080"]
+    networks: [default, sandbox_net]
+    # NOTE: dev-only convenience; do not mount the Docker socket in any shared/cloud
+    # environment. See docs/system-design.md §23.1 and §23.2 for the isolated-host design.
+
+  mock-services: # fake HubSpot/Gmail/Calendar/Search for dev & evals
+    build: ./mocks
+    ports: ["8100:8100"]
+
+  web:
+    build: ./frontend
+    env_file: .env
+    ports: ["3000:3000"]
+    volumes: ["./frontend:/app", "/app/node_modules", "/app/.next"]
+
+volumes:
+  pgdata: {}
+  minio-data: {}
+
+networks:
+  sandbox_net:
+    internal: true

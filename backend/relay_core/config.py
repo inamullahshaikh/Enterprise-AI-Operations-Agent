@@ -1,0 +1,76 @@
+from functools import lru_cache
+from typing import Literal
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Central app configuration, loaded from environment variables / .env.
+
+    See docs/system-design.md §25 for the full variable reference.
+    """
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    env: Literal["dev", "staging", "prod"] = "dev"
+    app_base_url: str = "http://localhost:3000"
+    api_base_url: str = "http://localhost:8000"
+
+    # Database / cache / storage
+    database_url: str
+    langgraph_db_url: str
+    redis_url: str
+    s3_endpoint_url: str | None = None
+    s3_bucket: str = "relay"
+    s3_access_key: str | None = None
+    s3_secret_key: str | None = None
+
+    # Auth
+    jwt_private_key_path: str = "/secrets/jwt_ed25519.pem"
+    jwt_public_key_path: str = "/secrets/jwt_ed25519.pub"
+    access_token_ttl_min: int = 15
+    refresh_token_ttl_days: int = 14
+
+    # Encryption
+    kms_provider: Literal["local", "aws"] = "local"
+    local_master_key: str | None = None
+    aws_kms_key_id: str | None = None
+
+    # Gemini
+    gemini_api_key: str = ""
+    model_planner: str = "gemini-3.8-flash"
+    model_planner_thinking: str = "high"
+    model_executor: str = "gemini-3.8-flash"
+    model_executor_thinking: str = "low"
+    model_validator: str = "gemini-3.8-flash"
+    model_validator_thinking: str = "medium"
+    model_light: str = "gemini-3.5-flash-lite"
+    model_light_thinking: str = "minimal"
+    model_fallback_executor: str = "gemini-3.7-flash"
+    model_escalation: str | None = None
+    embedding_model: str = "gemini-embedding-001"
+    embedding_dim: int = 768
+    gemini_rpm_limit: int = 60
+
+    # Connectors
+    sandbox_url: str = "http://sandbox:8080"
+    sandbox_timeout_s: float = 30.0
+    web_search_provider: str = "tavily"
+    web_search_api_key: str | None = None
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: str | None = None
+    hubspot_client_id: str | None = None
+    hubspot_client_secret: str | None = None
+    use_mock_connectors: bool = True
+
+    # Observability
+    langfuse_host: str | None = None
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    otel_exporter_otlp_endpoint: str | None = None
+    sentry_dsn: str | None = None
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()  # type: ignore[call-arg]
