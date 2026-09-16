@@ -10,6 +10,7 @@ from relay_core.db.repositories.agent_runs import AgentRunRepository
 from relay_core.db.repositories.attachments import AttachmentRepository
 from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.db.repositories.conversations import ConversationRepository
+from relay_core.db.repositories.documents import DocumentRepository
 from relay_core.db.repositories.llm_calls import LLMCallRepository
 from relay_core.db.repositories.messages import MessageRepository
 from relay_core.db.repositories.tool_calls import ToolCallRepository
@@ -31,5 +32,6 @@ class AgentDeps:
     tool_calls: ToolCallRepository
     connector_installations: ConnectorInstallationRepository
     attachments: AttachmentRepository
+    documents: DocumentRepository
     tool_registry: ToolRegistry
     tool_executor: ToolExecutor

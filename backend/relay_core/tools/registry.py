@@ -13,17 +13,30 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from relay_core.config import Settings
 from relay_core.connectors.base import Connector, ExecutionContext, ToolSpec
+from relay_core.connectors.builtin.documents import DocumentsConnector
 from relay_core.connectors.builtin.file_upload import FileUploadConnector
+from relay_core.connectors.builtin.python_sandbox import PythonSandboxConnector
 from relay_core.connectors.manifest import load_manifests
 from relay_core.connectors.registry import CONNECTOR_TYPES
 from relay_core.db.repositories.attachments import AttachmentRepository
+from relay_core.db.repositories.collections import CollectionRepository
 from relay_core.db.repositories.connector_credentials import ConnectorCredentialRepository
 from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
+from relay_core.db.repositories.document_chunks import DocumentChunkRepository
+from relay_core.db.repositories.documents import DocumentRepository
+from relay_core.db.repositories.tool_calls import ToolCallRepository
+from relay_core.llm.gateway import LLMGateway
 from relay_core.security.credential_codec import decrypt_secrets
 from relay_core.security.crypto import LocalKMS
 from relay_core.storage.object_store import ObjectStore
 from relay_core.tools.sanitizer import sanitize_schema
+
+# Always-available connectors (no installation row): bound on every run regardless of what's
+# requested from them (matching relay_api.routers.connectors._ALWAYS_AVAILABLE_KEYS), so they
+# never compete with an admin-installed connector of the same manifest key.
+_ALWAYS_AVAILABLE_KEYS = frozenset({"file_upload", "documents", "python_sandbox"})
 
 
 @dataclass(frozen=True)
@@ -64,13 +77,26 @@ def to_gemini_declaration(bound: BoundTool) -> dict[str, Any]:
 
 
 class ToolRegistry:
-    def __init__(self, session: AsyncSession, object_store: ObjectStore, kms: LocalKMS) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        object_store: ObjectStore,
+        kms: LocalKMS,
+        gateway: LLMGateway,
+        settings: Settings,
+    ) -> None:
         self.session = session
         self.object_store = object_store
         self.kms = kms
+        self.gateway = gateway
+        self.settings = settings
         self.installations = ConnectorInstallationRepository(session)
         self.credentials = ConnectorCredentialRepository(session)
         self.attachments = AttachmentRepository(session)
+        self.collections = CollectionRepository(session)
+        self.documents = DocumentRepository(session)
+        self.chunks = DocumentChunkRepository(session)
+        self.tool_calls = ToolCallRepository(session)
 
     async def tools_for_run(
         self,
@@ -95,10 +121,38 @@ class ToolRegistry:
         file_upload = FileUploadConnector(self.attachments, self.object_store)
         bound.extend(await self._bind(file_upload, "file_upload", None, file_upload_ctx, requested))
 
+        documents_ctx = ExecutionContext(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            run_id=run_id,
+            conversation_id=conversation_id,
+            installation_id="documents",
+        )
+        documents_connector = DocumentsConnector(
+            self.collections, self.documents, self.chunks, self.gateway, self.settings
+        )
+        bound.extend(
+            await self._bind(documents_connector, "documents", None, documents_ctx, requested)
+        )
+
+        sandbox_ctx = ExecutionContext(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            run_id=run_id,
+            conversation_id=conversation_id,
+            installation_id="python_sandbox",
+        )
+        sandbox_connector = PythonSandboxConnector(
+            self.tool_calls, self.object_store, self.settings
+        )
+        bound.extend(
+            await self._bind(sandbox_connector, "python_sandbox", None, sandbox_ctx, requested)
+        )
+
         provider_keys = {
             key
             for key, manifest in manifests.items()
-            if key != "file_upload" and requested & set(manifest.provides_capabilities)
+            if key not in _ALWAYS_AVAILABLE_KEYS and requested & set(manifest.provides_capabilities)
         }
         for installation in await self.installations.list_active_by_connector_keys(
             workspace_id, provider_keys

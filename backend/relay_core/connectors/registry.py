@@ -6,8 +6,10 @@ class-level registry, so that lives in `relay_core.tools.registry.ToolRegistry` 
 """
 
 from relay_core.connectors.base import Connector
+from relay_core.connectors.builtin.documents import DocumentsConnector
 from relay_core.connectors.builtin.file_upload import FileUploadConnector
 from relay_core.connectors.builtin.postgres import PostgresConnector
+from relay_core.connectors.builtin.python_sandbox import PythonSandboxConnector
 
 # A plain dict literal, not `{c.key: c for c in [...]}`: mypy's strict mode can't narrow the
 # comprehension's loop variable back down from the two classes' common `ABCMeta` metaclass to
@@ -15,4 +17,6 @@ from relay_core.connectors.builtin.postgres import PostgresConnector
 CONNECTOR_TYPES: dict[str, type[Connector]] = {
     PostgresConnector.key: PostgresConnector,
     FileUploadConnector.key: FileUploadConnector,
+    DocumentsConnector.key: DocumentsConnector,
+    PythonSandboxConnector.key: PythonSandboxConnector,
 }

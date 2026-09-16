@@ -31,6 +31,9 @@ router = APIRouter(prefix="/workspaces/{workspace_id}/connectors", tags=["connec
 catalog_router = APIRouter(prefix="/connectors", tags=["connectors"])
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+# Always-available connectors (no installation row, no config/secrets — sections 10.2/10.8):
+# excluded from the install catalog and rejected by install_connector below.
+_ALWAYS_AVAILABLE_KEYS = frozenset({"file_upload", "documents", "python_sandbox"})
 
 
 def _slugify(name: str) -> str:
@@ -129,7 +132,9 @@ async def _owned_installation(
 @catalog_router.get("/catalog", response_model=list[ManifestOut])
 async def get_catalog() -> list[ManifestOut]:
     return [
-        ManifestOut.from_manifest(m) for m in load_manifests().values() if m.key != "file_upload"
+        ManifestOut.from_manifest(m)
+        for m in load_manifests().values()
+        if m.key not in _ALWAYS_AVAILABLE_KEYS
     ]
 
 
@@ -155,7 +160,7 @@ async def install_connector(
     if (
         manifest is None
         or body.connector_key not in CONNECTOR_TYPES
-        or body.connector_key == "file_upload"
+        or body.connector_key in _ALWAYS_AVAILABLE_KEYS
     ):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, f"Unknown connector {body.connector_key!r}"

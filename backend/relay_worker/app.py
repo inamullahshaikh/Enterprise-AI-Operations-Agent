@@ -19,7 +19,7 @@ app.conf.update(
     },
 )
 
-from relay_worker.tasks import agent  # noqa: E402, F401 -- registers the `agent` task
+from relay_worker.tasks import agent, ingest  # noqa: E402, F401 -- registers the tasks
 
 # Later phases add their task modules here, e.g.:
-# from relay_worker.tasks import ingest, memory, connectors, maintenance, evals
+# from relay_worker.tasks import memory, connectors, maintenance, evals

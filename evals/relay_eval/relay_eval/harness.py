@@ -102,7 +102,7 @@ async def _run_case(
 ) -> CaseResult:
     async with sessionmaker() as session:
         workspace_id = await ensure_workspace_for_profile(
-            session, settings, kms, user_id, case.connector_profile
+            session, settings, kms, redis, user_id, case.connector_profile
         )
         conversation_id = await new_conversation(session, workspace_id, user_id)
         if case.connector_profile == "csv_only" and case.csv_fixture:
@@ -146,4 +146,12 @@ async def _run_case(
         agent_run = await AgentRunRepository(session).get(workspace_id, run.id)
         assert agent_run is not None, f"agent_runs row for case {case.key!r} disappeared"
         tool_calls = await ToolCallRepository(session).list_for_run(workspace_id, run.id)
-        return await score_case(case, agent_run, tool_calls, settings, latency_s)
+        final_answer = None
+        if agent_run.final_message_id is not None:
+            final_message = await MessageRepository(session).get(
+                workspace_id, agent_run.final_message_id
+            )
+            final_answer = final_message.content if final_message is not None else None
+        return await score_case(
+            case, agent_run, tool_calls, settings, latency_s, final_answer=final_answer
+        )

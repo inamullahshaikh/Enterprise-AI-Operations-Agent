@@ -1,9 +1,12 @@
-"""Deterministic scoring for the Phase 3 eval suites (docs/system-design.md section 21.4's
-"deterministic checks first" — LLM-as-judge scoring, needed for `planning`/`rag`/`task_success`
-and for this suite's own `fabrication_check`, is Phase 8, once there's enough case history to
-calibrate a judge against, per docs/adr/0009).
+"""Deterministic scoring for the suites built so far (docs/system-design.md section 21.4's
+"deterministic checks first" — LLM-as-judge scoring, needed for `planning`/`task_success` and
+for `capability_detection`'s own `fabrication_check`, is Phase 8, once there's enough case
+history to calibrate a judge against, per docs/adr/0009). The `rag` suite's `must_mention` /
+`must_call_tools` checks below are deterministic in that same spirit — substring and tool-name
+matching, not a judge scoring faithfulness.
 """
 
+import fnmatch
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -31,6 +34,7 @@ async def score_case(
     tool_calls: list[ToolCall],
     settings: Settings,
     latency_s: float,
+    final_answer: str | None = None,
 ) -> CaseResult:
     reasons: list[str] = []
 
@@ -54,6 +58,23 @@ async def score_case(
         max_cost = Decimal(str(case.expectations.max_cost_usd))
         if run.cost_usd > max_cost:
             reasons.append(f"cost: {run.cost_usd} exceeds max {max_cost}")
+
+    answer = final_answer or ""
+    for phrase in case.expectations.must_mention:
+        if phrase.lower() not in answer.lower():
+            reasons.append(f"final answer: expected to mention {phrase!r}, got {answer!r}")
+    for phrase in case.expectations.must_not_mention:
+        if phrase.lower() in answer.lower():
+            reasons.append(f"final answer: expected NOT to mention {phrase!r}, got {answer!r}")
+
+    if case.expectations.must_call_tools:
+        called = {c.llm_name for c in tool_calls if c.status == "succeeded"}
+        for pattern in case.expectations.must_call_tools:
+            if not any(fnmatch.fnmatch(name, pattern) for name in called):
+                reasons.append(
+                    f"tool calls: expected a successful call matching {pattern!r}, "
+                    f"got {sorted(called)}"
+                )
 
     return CaseResult(
         key=case.key,

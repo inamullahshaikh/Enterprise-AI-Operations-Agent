@@ -28,6 +28,7 @@ from relay_core.db.repositories.agent_runs import AgentRunRepository
 from relay_core.db.repositories.attachments import AttachmentRepository
 from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.db.repositories.conversations import ConversationRepository
+from relay_core.db.repositories.documents import DocumentRepository
 from relay_core.db.repositories.llm_calls import LLMCallRepository
 from relay_core.db.repositories.messages import MessageRepository
 from relay_core.db.repositories.tool_calls import ToolCallRepository
@@ -60,9 +61,13 @@ async def run_agent_once(
     tool_calls = ToolCallRepository(session)
     connector_installations = ConnectorInstallationRepository(session)
     attachments = AttachmentRepository(session)
+    documents = DocumentRepository(session)
     events = EventPublisher(redis)
     kms = build_kms(settings)
-    tool_registry = ToolRegistry(session, object_store or build_object_store(settings), kms)
+    resolved_gateway = gateway or build_llm_gateway(session, redis, settings)
+    tool_registry = ToolRegistry(
+        session, object_store or build_object_store(settings), kms, resolved_gateway, settings
+    )
 
     run = await runs.get(workspace_id, run_id)
     if run is None:
@@ -84,7 +89,7 @@ async def run_agent_once(
     await events.publish(run_id, RUN_STARTED, {"run_id": str(run_id)})
 
     deps = AgentDeps(
-        gateway=gateway or build_llm_gateway(session, redis, settings),
+        gateway=resolved_gateway,
         events=events,
         settings=settings,
         conversations=conversations,
@@ -94,6 +99,7 @@ async def run_agent_once(
         tool_calls=tool_calls,
         connector_installations=connector_installations,
         attachments=attachments,
+        documents=documents,
         tool_registry=tool_registry,
         tool_executor=ToolExecutor(tool_calls, events),
     )

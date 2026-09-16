@@ -14,9 +14,9 @@ from pathlib import Path
 from relay_eval.harness import run_suite
 from relay_eval.report import print_report, write_report
 
-_ALL_SUITES = ["routing", "capability_detection", "text_to_sql"]
+_ALL_SUITES = ["routing", "capability_detection", "text_to_sql", "rag"]
 # Matches the CI gates in docs/system-design.md section 21.1 for the suites built so far.
-_GATES = {"routing": 0.95, "capability_detection": 0.95, "text_to_sql": 0.85}
+_GATES = {"routing": 0.95, "capability_detection": 0.95, "text_to_sql": 0.85, "rag": 0.85}
 
 
 def main() -> None:

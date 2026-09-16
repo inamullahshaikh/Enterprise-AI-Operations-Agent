@@ -28,9 +28,11 @@ from relay_core.storage.object_store import ObjectStore, build_object_store
 
 __all__ = [
     "CurrentUser",
+    "IngestDispatcher",
     "RunDispatcher",
     "get_current_user",
     "get_genai_client",
+    "get_ingest_dispatcher",
     "get_kms",
     "get_llm_gateway",
     "get_object_store",
@@ -109,6 +111,21 @@ def get_run_dispatcher() -> RunDispatcher:
         from relay_worker.tasks.agent import run_agent
 
         run_agent.delay(str(workspace_id), str(run_id))
+
+    return _dispatch
+
+
+IngestDispatcher = Callable[[uuid.UUID, uuid.UUID], Awaitable[None]]
+
+
+def get_ingest_dispatcher() -> IngestDispatcher:
+    """Enqueues a `documents` row for `relay_worker.tasks.ingest` to process — the same
+    override-for-tests shape as `get_run_dispatcher` above, for the same reason."""
+
+    async def _dispatch(workspace_id: uuid.UUID, document_id: uuid.UUID) -> None:
+        from relay_worker.tasks.ingest import run_ingest_document
+
+        run_ingest_document.delay(str(workspace_id), str(document_id))
 
     return _dispatch
 

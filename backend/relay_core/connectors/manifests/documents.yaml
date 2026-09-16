@@ -1,0 +1,13 @@
+# docs/system-design.md section 10.2. Always available like file_upload (section 10.8) — no
+# installation row, no config/secrets — so it's excluded from GET /connectors/catalog and
+# install_connector the same way file_upload is (relay_api/routers/connectors.py).
+key: documents
+display_name: Documents
+category: generic
+description: Search the workspace's knowledge base of ingested documents. Always available.
+auth_type: none
+config_schema: {}
+secrets_schema: {}
+provides_capabilities:
+  - knowledge.search
+docs_url: null

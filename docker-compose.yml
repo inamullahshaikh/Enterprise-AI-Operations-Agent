@@ -41,7 +41,10 @@ services:
       postgres: { condition: service_healthy }
       redis: { condition: service_started }
     ports: ["8000:8000"]
-    volumes: ["./backend:/app"]
+    # demo/documents is read by `make seed` (relay_worker.tasks.maintenance.seed_demo, run
+    # inside this container) to ingest the sample knowledge base — everything else in demo/ is
+    # only needed by demo-db above.
+    volumes: ["./backend:/app", "./demo/documents:/demo/documents:ro"]
 
   worker:
     build: { context: ., dockerfile: backend/Dockerfile }
@@ -50,7 +53,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_started }
-    volumes: ["./backend:/app"]
+    volumes: ["./backend:/app", "./demo/documents:/demo/documents:ro"]
 
   beat:
     build: { context: ., dockerfile: backend/Dockerfile }
@@ -64,8 +67,15 @@ services:
     build: ./sandbox
     ports: ["8080:8080"]
     networks: [default, sandbox_net]
+    environment:
+      SANDBOX_RUNTIME_IMAGE: relay-sandbox-runtime:latest
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
     # NOTE: dev-only convenience; do not mount the Docker socket in any shared/cloud
-    # environment. See docs/system-design.md §23.1 and §23.2 for the isolated-host design.
+    # environment. Socket access here is equivalent to root on the host — this service can
+    # launch sibling containers with arbitrary mounts/capabilities. See docs/system-design.md
+    # §10.7/§23.1/§23.2 for the isolated-host design a real deployment needs instead
+    # (a managed sandbox provider, or Docker-outside-of-Docker with gVisor/Kata on a host with
+    # no other sensitive workloads).
 
   mock-services: # fake HubSpot/Gmail/Calendar/Search for dev & evals
     build: ./mocks

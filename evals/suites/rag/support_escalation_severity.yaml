@@ -1,0 +1,9 @@
+key: rag_support_escalation_severity
+suite: rag
+connector_profile: docs_only
+message: "Per our support escalation policy, what should we do immediately for a Sev 1 ticket?"
+expectations:
+  route: task
+  must_mention: ["on-call"]
+  must_call_tools: ["*__search_documents"]
+tags: [rag, citations]

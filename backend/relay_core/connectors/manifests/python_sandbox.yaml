@@ -1,0 +1,14 @@
+# docs/system-design.md section 10.7. Always available like file_upload/documents (sections
+# 10.8/10.2) — settings.sandbox_url is shared workspace infra, not a per-installation
+# credential — so it's excluded from GET /connectors/catalog and install_connector the same way
+# (relay_api/routers/connectors.py's _ALWAYS_AVAILABLE_KEYS).
+key: python_sandbox
+display_name: Python sandbox
+category: generic
+description: Run Python for data analysis and charts in an isolated container. Always available.
+auth_type: none
+config_schema: {}
+secrets_schema: {}
+provides_capabilities:
+  - code.execute
+docs_url: null

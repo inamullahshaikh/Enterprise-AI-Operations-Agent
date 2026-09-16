@@ -1,0 +1,9 @@
+key: rag_usage_drop_threshold
+suite: rag
+connector_profile: docs_only
+message: "Per the renewal playbook, at what usage drop percentage should we treat a renewal as at risk regardless of MRR?"
+expectations:
+  route: task
+  must_mention: ["30"]
+  must_call_tools: ["*__search_documents"]
+tags: [rag, citations]

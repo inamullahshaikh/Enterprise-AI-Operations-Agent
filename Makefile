@@ -1,7 +1,13 @@
-.PHONY: up down logs migrate seed test lint eval fmt
+.PHONY: up down logs migrate seed test lint eval fmt sandbox-image
 
-up:
+up: sandbox-image
 	docker compose up --build
+
+# The image code.execute's containers actually run *from* — not itself a docker-compose
+# service, since nothing ever starts a container from it directly (docs/system-design.md
+# section 10.7); the `sandbox` service's SANDBOX_RUNTIME_IMAGE just needs the tag to exist.
+sandbox-image:
+	docker build -t relay-sandbox-runtime:latest sandbox/runtime
 
 down:
 	docker compose down

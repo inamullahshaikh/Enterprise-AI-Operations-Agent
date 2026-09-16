@@ -7,11 +7,12 @@ why automatic function calling is disabled: Relay must see and gate every
 function call itself rather than let the SDK execute one automatically.
 """
 
+import math
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 
 from google import genai
 from google.genai import types
@@ -227,6 +228,36 @@ class LLMGateway:
             latency_ms=latency_ms,
         )
 
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        task: Literal["RETRIEVAL_DOCUMENT", "RETRIEVAL_QUERY"],
+        settings: Settings,
+    ) -> list[list[float]]:
+        """Embeds `texts` with `settings.embedding_model` (docs/system-design.md section 9.5:
+        `RETRIEVAL_DOCUMENT` for chunks at ingestion time, `RETRIEVAL_QUERY` for a search
+        query). Every vector is re-normalized: `output_dimensionality` truncates the model's
+        native embedding, and a truncated vector is no longer unit-length, so cosine distance
+        against `document_chunks.embedding` would be wrong without renormalizing.
+
+        Unlike `generate()`, no `llm_calls` row is recorded — `EmbedContentResponse.metadata`
+        reports `billable_character_count`, not the token-based usage `llm_calls`/
+        `model_pricing` are built around, so embedding cost isn't tracked yet. Revisit once
+        ingestion volume makes that matter (docs/system-design.md section 19).
+        """
+        if not texts:
+            return []
+        await self.limiter.acquire(settings.embedding_model)
+        resp = await self.client.aio.models.embed_content(
+            model=settings.embedding_model,
+            contents=texts,
+            config=types.EmbedContentConfig(
+                task_type=task, output_dimensionality=settings.embedding_dim
+            ),
+        )
+        return [_normalize(e.values or []) for e in resp.embeddings or []]
+
 
 @lru_cache
 def _client_for(api_key: str) -> genai.Client:
@@ -253,6 +284,11 @@ def build_llm_gateway(
         llm_calls=LLMCallRepository(session),
         pricing=ModelPricingRepository(session),
     )
+
+
+def _normalize(values: list[float]) -> list[float]:
+    norm = math.sqrt(sum(v * v for v in values))
+    return values if norm == 0 else [v / norm for v in values]
 
 
 def _is_resource_exhausted(exc: "genai.errors.ClientError") -> bool:

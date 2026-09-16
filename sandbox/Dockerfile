@@ -2,9 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir fastapi uvicorn[standard]
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY main.py runner.py ./
 
 EXPOSE 8080
 

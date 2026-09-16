@@ -69,6 +69,101 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: pytest tests/integration
 
+  eval-harness:
+    # docs/system-design.md section 21.5 / 28 Phase 3 "done when": relay-eval run --all --ci
+    # blocks the build if routing/capability_detection/text_to_sql/rag miss their gate (section
+    # 21.1). Unlike unit-tests/integration-tests, this runs through the real graph against a
+    # real Gemini API and real R2 storage (evals/README.md), not a scripted client or
+    # testcontainers-only fixtures — it needs GEMINI_API_KEY and R2_* as repo secrets
+    # (Settings.gemini_api_key / .r2_*, backend/relay_core/config.py) since it costs real
+    # Gemini spend on every push/PR. It never touches the developer's own `.env`.
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests]
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+          POSTGRES_DB: relay
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U relay" --health-interval 5s --health-timeout 5s
+          --health-retries 10
+      demo-db:
+        # The "customer" database the postgres connector queries (docker-compose.yml's
+        # demo-db service) — seeded by hand below, not via docker-entrypoint-initdb.d: GitHub
+        # Actions starts service containers before actions/checkout runs, so demo/seed/*.sql
+        # wouldn't exist on disk yet for Postgres's init scripts to pick up.
+        image: postgres:16
+        env:
+          POSTGRES_USER: acme
+          POSTGRES_PASSWORD: acme
+          POSTGRES_DB: acme
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U acme" --health-interval 5s --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+    env:
+      DATABASE_URL: postgresql+asyncpg://relay:relay@localhost:5432/relay
+      LANGGRAPH_DB_URL: postgresql://relay:relay@localhost:5432/relay
+      REDIS_URL: redis://localhost:6379/0
+      DEMO_DB_URL: postgresql://acme:acme@localhost:5433/acme
+      KMS_PROVIDER: local
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend + eval harness
+        run: |
+          pip install -e ".[dev]"
+          pip install -e ../evals/relay_eval
+      - name: Seed the demo database
+        run: |
+          PGPASSWORD=acme psql -h localhost -p 5433 -U acme -d acme -f ../demo/seed/01_schema.sql
+          PGPASSWORD=acme psql -h localhost -p 5433 -U acme -d acme -f ../demo/seed/02_data.sql
+      - name: Migrate Relay's own database
+        run: alembic upgrade head
+      - name: Generate a throwaway JWT keypair and KMS master key
+        # Ephemeral and job-scoped, the same way tests/conftest.py's test_settings fixture does
+        # it for pytest — nothing here is a real secret, so it's generated fresh, not stored.
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import base64, os
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+          key = Ed25519PrivateKey.generate()
+          private_pem = key.private_bytes(
+              encoding=serialization.Encoding.PEM,
+              format=serialization.PrivateFormat.PKCS8,
+              encryption_algorithm=serialization.NoEncryption(),
+          )
+          public_pem = key.public_key().public_bytes(
+              encoding=serialization.Encoding.PEM,
+              format=serialization.PublicFormat.SubjectPublicKeyInfo,
+          )
+          open("jwt_ed25519.pem", "wb").write(private_pem)
+          open("jwt_ed25519.pub", "wb").write(public_pem)
+          print("JWT_PRIVATE_KEY_PATH=" + os.path.abspath("jwt_ed25519.pem"))
+          print("JWT_PUBLIC_KEY_PATH=" + os.path.abspath("jwt_ed25519.pub"))
+          print("LOCAL_MASTER_KEY=base64:" + base64.b64encode(os.urandom(32)).decode())
+          PY
+      - name: relay-eval run --all --ci
+        run: relay-eval run --all --ci
+
   security:
     runs-on: ubuntu-latest
     steps:
