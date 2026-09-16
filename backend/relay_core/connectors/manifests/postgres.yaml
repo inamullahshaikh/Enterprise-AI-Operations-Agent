@@ -1,0 +1,31 @@
+# docs/system-design.md section 10.1. `provides_capabilities` is coarse-grained per
+# docs/adr/0009: any healthy postgres installation is treated as a provider of all four
+# capabilities, since there's no per-table admin annotation ("subscriptions = subscription.read")
+# yet — `run_sql` can serve any of them regardless of which one triggered planning.
+key: postgres
+display_name: PostgreSQL
+category: database
+description: Read-only analytics over a company Postgres database.
+auth_type: connection_string
+config_schema:
+  type: object
+  required: [host, port, database]
+  properties:
+    host: { type: string }
+    port: { type: integer, default: 5432 }
+    database: { type: string }
+    schemas: { type: array, items: { type: string }, default: ["public"] }
+    statement_timeout_s: { type: number, default: 10 }
+    row_limit: { type: integer, default: 500 }
+secrets_schema:
+  type: object
+  required: [username, password]
+  properties:
+    username: { type: string }
+    password: { type: string }
+provides_capabilities:
+  - sql.query
+  - customer.read
+  - subscription.read
+  - usage.read
+docs_url: https://www.postgresql.org/docs/

@@ -1,0 +1,9 @@
+key: capability_detection_csv_satisfies_usage
+suite: capability_detection
+connector_profile: csv_only
+csv_fixture: usage_export.csv
+message: "Using the attached usage export, which accounts are included and what's their total usage?"
+expectations:
+  route: task
+  expect_no_missing_capabilities: true
+tags: [capability_detection, csv]

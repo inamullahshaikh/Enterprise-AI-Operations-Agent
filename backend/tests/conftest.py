@@ -2,9 +2,13 @@
 
 `test_settings` builds a `Settings` instance with `_env_file=None` so tests never
 depend on (or read) a developer's local `.env` — every field the tests need is
-supplied explicitly here, including a throwaway JWT keypair generated fresh per
-test (rather than a fixed hardcoded key, which gitleaks would flag as a secret).
+supplied explicitly here, including a throwaway JWT keypair and a throwaway
+`LOCAL_MASTER_KEY` generated fresh per test (rather than fixed hardcoded secrets,
+which gitleaks would flag).
 """
+
+import base64
+import os
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -38,4 +42,5 @@ def test_settings(tmp_path) -> Settings:
         jwt_public_key_path=str(public_key_path),
         access_token_ttl_min=15,
         refresh_token_ttl_days=14,
+        local_master_key="base64:" + base64.b64encode(os.urandom(32)).decode(),
     )

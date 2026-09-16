@@ -9,9 +9,18 @@ Full design: [docs/system-design.md](docs/system-design.md).
 
 ## Status
 
-Phase 1 (foundation: auth, workspaces/RBAC, LLM gateway) — see
+Phase 3 (connector framework + first connectors + eval harness): a real `Connector`
+interface/registry/manifests, envelope-encrypted credentials, a tool registry + executor with
+untrusted-output wrapping, and the full `plan -> check_capabilities -> execute_step ->
+validate_step -> next_step -> synthesize` step-execution loop. Two built-in connectors —
+`postgres` (with a `sqlglot`-based read-only SQL guard) and `file_upload` (CSV, always
+available) — plus a seeded demo Postgres database and an eval harness CLI (`relay-eval`)
+covering the `routing`, `capability_detection`, and `text_to_sql` suites. See
+[docs/adr/0009-phase3-connector-metadata-in-code.md](docs/adr/0009-phase3-connector-metadata-in-code.md)
+for what's deliberately deferred to later phases. See
 [docs/system-design.md §28](docs/system-design.md#28-implementation-plan-week-by-week)
-for the full ten-week implementation plan.
+for the full ten-week implementation plan. The chat UI itself is a separate,
+upcoming pass so it gets proper design attention rather than a placeholder look.
 
 ## Repository layout
 

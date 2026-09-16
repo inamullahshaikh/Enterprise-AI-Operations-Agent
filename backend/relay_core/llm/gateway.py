@@ -9,11 +9,15 @@ function call itself rather than let the SDK execute one automatically.
 
 import time
 import uuid
+from collections.abc import Awaitable, Callable
+from functools import lru_cache
 from typing import Any
 
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
+from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -131,6 +135,124 @@ class LLMGateway:
         return await self.client.aio.models.generate_content(
             model=model, contents=contents, config=config
         )
+
+    async def generate_stream(
+        self,
+        *,
+        role: str,
+        system: str,
+        contents: Any,
+        workspace_id: uuid.UUID,
+        run_id: uuid.UUID | None = None,
+        on_delta: Callable[[str], Awaitable[None]],
+        settings: Settings | None = None,
+    ) -> LLMResponse:
+        """Streamed variant of `generate()`, for nodes that need to show tokens as
+        they arrive (docs/system-design.md section 8.5, `direct_answer`). Records
+        the same `llm_calls` row as `generate()` once the stream finishes.
+
+        No fallback-model or retry-on-error handling here: a stream that fails
+        partway through has already sent partial output to the user, so silently
+        retrying on a different model would duplicate or contradict it. If this
+        turns out to matter in practice, handle it explicitly rather than
+        papering over it with a blind retry.
+        """
+        profile = get_profile(role, settings=settings)
+        config = types.GenerateContentConfig(
+            system_instruction=system,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            thinking_config=(
+                types.ThinkingConfig(thinking_level=profile.thinking_level)
+                if profile.thinking_level
+                else None
+            ),
+            temperature=profile.temperature,
+            max_output_tokens=profile.max_output_tokens,
+        )
+
+        await self.limiter.acquire(profile.model)
+        started = time.monotonic()
+        last_chunk: types.GenerateContentResponse | None = None
+        text_parts: list[str] = []
+        async for chunk in await self.client.aio.models.generate_content_stream(
+            model=profile.model, contents=contents, config=config
+        ):
+            last_chunk = chunk
+            if chunk.text:
+                text_parts.append(chunk.text)
+                await on_delta(chunk.text)
+
+        latency_ms = int((time.monotonic() - started) * 1000)
+        usage = _usage_from_sdk(last_chunk) if last_chunk else Usage(0, 0, 0, 0)
+        pricing_row = await self.pricing.get(profile.model)
+        if pricing_row is None:
+            raise UnknownModelPricing(
+                f"No model_pricing row for {profile.model!r}; seed it via migration"
+            )
+        cost = cost_for_usage(usage, pricing_row)
+        finish_reason = None
+        if last_chunk and last_chunk.candidates and last_chunk.candidates[0].finish_reason:
+            finish_reason = str(last_chunk.candidates[0].finish_reason)
+
+        await self.llm_calls.create(
+            workspace_id=workspace_id,
+            run_id=run_id,
+            node=role,
+            model=profile.model,
+            fallback_from=None,
+            thinking_level=profile.thinking_level,
+            input_tokens=usage.input_tokens,
+            cached_tokens=usage.cached_tokens,
+            output_tokens=usage.output_tokens,
+            thought_tokens=usage.thought_tokens,
+            cost_usd=cost,
+            latency_ms=latency_ms,
+            finish_reason=finish_reason,
+            status="ok",
+            error=None,
+        )
+
+        return LLMResponse(
+            text="".join(text_parts),
+            parsed=None,
+            function_calls=[],
+            raw_content=last_chunk.candidates[0].content
+            if last_chunk and last_chunk.candidates
+            else None,
+            finish_reason=finish_reason,
+            usage=usage,
+            model=profile.model,
+            fallback_from=None,
+            cost_usd=cost,
+            latency_ms=latency_ms,
+        )
+
+
+@lru_cache
+def _client_for(api_key: str) -> genai.Client:
+    return genai.Client(api_key=api_key)
+
+
+def build_llm_gateway(
+    session: AsyncSession,
+    redis: Redis,
+    settings: Settings,
+    *,
+    client: genai.Client | None = None,
+) -> LLMGateway:
+    """Shared constructor for the two places an `LLMGateway` gets built: the
+    FastAPI dependency (`relay_api/deps.py::get_llm_gateway`, which passes its
+    own `client` through so tests can keep overriding `get_genai_client`) and
+    the Celery agent-run task, which has no `Depends()` machinery of its own and
+    so falls back to a process-cached client for `settings.gemini_api_key`.
+    """
+    limiter = RedisRateLimiter(redis, rpm_limit=settings.gemini_rpm_limit)
+    return LLMGateway(
+        client or _client_for(settings.gemini_api_key),
+        limiter=limiter,
+        llm_calls=LLMCallRepository(session),
+        pricing=ModelPricingRepository(session),
+    )
 
 
 def _is_resource_exhausted(exc: "genai.errors.ClientError") -> bool:

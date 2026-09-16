@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     langgraph_db_url: str
     redis_url: str
 
+    # Demo company database (the "customer" the agent queries) — only used by
+    # `relay_worker.tasks.maintenance.seed_demo` to install a postgres connector pointing at
+    # it; nothing in the request path reads this.
+    demo_db_url: str = ""
+
     # Object storage — Cloudflare R2 (S3-compatible API), used in every environment.
     # boto3 clients must be created with region_name="auto" and addressing_style="path".
     r2_account_id: str = ""

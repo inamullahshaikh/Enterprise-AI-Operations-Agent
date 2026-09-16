@@ -75,3 +75,20 @@ class LLMResponse:
             cost_usd=cost_usd,
             latency_ms=latency_ms,
         )
+
+
+def parse_structured[T: BaseModel](resp: LLMResponse, schema: type[T]) -> T | None:
+    """Best-effort parse of a structured-output response into `schema`. Prefers
+    the SDK's own `resp.parsed` when it already matches — a genuine round-trip
+    against the real API populates it — and otherwise falls back to validating
+    `resp.text` directly, which is what a fake client in a test (or a future
+    non-Gemini provider behind this same gateway) can reliably provide.
+    """
+    if isinstance(resp.parsed, schema):
+        return resp.parsed
+    if resp.text:
+        try:
+            return schema.model_validate_json(resp.text)
+        except ValueError:
+            return None
+    return None

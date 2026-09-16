@@ -1,0 +1,10 @@
+key: text_to_sql_globex_renewal_date
+suite: text_to_sql
+connector_profile: db_only
+message: "When does Globex's subscription end?"
+expectations:
+  route: task
+  reference_sql: >
+    SELECT s.end_date FROM subscriptions s JOIN accounts a ON a.id = s.account_id
+    WHERE a.name = 'Globex'
+tags: [text_to_sql]

@@ -1,0 +1,25 @@
+[project]
+name = "relay-eval"
+version = "0.1.0"
+description = "Relay eval harness CLI (docs/system-design.md section 21)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "pyyaml>=6.0",
+  "pydantic>=2.9",
+  "asyncpg>=0.29",
+]
+
+# Not "relay" itself: this package runs *through* the real graph and repositories
+# (section 21.5), so it needs relay_core/relay_api importable, but that's an environment
+# requirement (install both packages into the same venv/image), not a pip dependency edge —
+# there's no portable relative-path dependency spec across pip/uv/Docker build contexts that's
+# worth the fragility. See evals/README.md for the install command.
+[project.scripts]
+relay-eval = "relay_eval.cli:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["relay_eval*"]

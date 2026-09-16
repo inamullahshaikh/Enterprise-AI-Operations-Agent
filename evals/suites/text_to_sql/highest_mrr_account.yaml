@@ -1,0 +1,10 @@
+key: text_to_sql_highest_mrr_account
+suite: text_to_sql
+connector_profile: db_only
+message: "Which single account has the highest monthly recurring revenue?"
+expectations:
+  route: task
+  reference_sql: >
+    SELECT a.name FROM subscriptions s JOIN accounts a ON a.id = s.account_id
+    ORDER BY s.mrr_usd DESC LIMIT 1
+tags: [text_to_sql]

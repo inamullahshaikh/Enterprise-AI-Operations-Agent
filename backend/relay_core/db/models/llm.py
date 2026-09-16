@@ -1,10 +1,5 @@
 """LLM usage & pricing tables (docs/system-design.md section 14.3).
 
-`run_id` has no foreign key yet: `agent_runs` is created in the Phase 2 migration.
-That later migration adds `ALTER TABLE llm_calls ADD CONSTRAINT ... REFERENCES
-agent_runs(id)` once the table exists — the same forward-reference pattern the
-design doc itself uses for `messages.run_id -> agent_runs` in section 14.3.
-
 `langfuse_span_id` from the original design is dropped per
 docs/adr/0008-cut-observability-stack.md; `llm_calls` and `agent_runs.cost_usd`
 are the source of truth for cost/usage instead of an external trace viewer.
@@ -14,7 +9,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, Date, Numeric, String
+from sqlalchemy import CheckConstraint, Date, ForeignKey, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,7 +20,13 @@ class LLMCall(Base, WorkspaceScoped):
     __tablename__ = "llm_calls"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid7)
-    run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # The FK is added by the Phase 2 migration's trailing ALTER (agent_runs is
+    # created after this table); declaring it here now that agent_runs exists in
+    # the ORM metadata is safe because Alembic — not this declaration — controls
+    # DDL ordering.
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_runs.id", ondelete="CASCADE")
+    )
     node: Mapped[str] = mapped_column(String, nullable=False)
     model: Mapped[str] = mapped_column(String, nullable=False)
     fallback_from: Mapped[str | None] = mapped_column(String)

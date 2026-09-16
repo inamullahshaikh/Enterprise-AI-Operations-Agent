@@ -31,7 +31,10 @@ services:
   # docs/adr/0005-cloudflare-r2-object-storage.md.
 
   api:
-    build: ./backend
+    # Build context is the repo root, not ./backend: the image also installs
+    # evals/relay_eval (docs/system-design.md section 21), which needs relay_core/relay_api
+    # importable and so can't be built from a context that excludes them. See backend/Dockerfile.
+    build: { context: ., dockerfile: backend/Dockerfile }
     command: uvicorn relay_api.main:app --host 0.0.0.0 --port 8000 --reload
     env_file: .env
     depends_on:
@@ -41,7 +44,7 @@ services:
     volumes: ["./backend:/app"]
 
   worker:
-    build: ./backend
+    build: { context: ., dockerfile: backend/Dockerfile }
     command: celery -A relay_worker.app worker -Q agent,agent_resume,ingest,memory,eval,maintenance -c 4
     env_file: .env
     depends_on:
@@ -50,7 +53,7 @@ services:
     volumes: ["./backend:/app"]
 
   beat:
-    build: ./backend
+    build: { context: ., dockerfile: backend/Dockerfile }
     command: celery -A relay_worker.app beat
     env_file: .env
     depends_on:

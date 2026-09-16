@@ -1,0 +1,7 @@
+key: routing_task_analysis
+suite: routing
+connector_profile: db_only
+message: "Find our highest-MRR account and tell me whether their usage has dropped this month."
+expectations:
+  route: task
+tags: [routing, task]

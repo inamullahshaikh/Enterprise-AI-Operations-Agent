@@ -1,0 +1,7 @@
+key: routing_direct_general_knowledge
+suite: routing
+connector_profile: none
+message: "What does MRR stand for?"
+expectations:
+  route: direct
+tags: [routing, direct]

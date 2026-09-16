@@ -1,0 +1,10 @@
+key: routing_task_no_connector
+suite: routing
+connector_profile: none
+message: "Pull a list of accounts whose usage dropped over 30% this month."
+expectations:
+  # Still "task" even with nothing connected — routing should never downgrade an
+  # otherwise-multi-step request to "direct" just because it'll turn out to be blocked later;
+  # that's `check_capabilities`'s job (see capability_detection suite), not the router's.
+  route: task
+tags: [routing, task]

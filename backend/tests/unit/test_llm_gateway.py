@@ -31,9 +31,27 @@ def _response(
     )
 
 
+def _chunk(text: str, *, prompt_tokens=0, output_tokens=0) -> types.GenerateContentResponse:
+    return types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(role="model", parts=[types.Part(text=text)]),
+                finish_reason=types.FinishReason.STOP,
+            )
+        ],
+        usage_metadata=types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=prompt_tokens,
+            candidates_token_count=output_tokens,
+            thoughts_token_count=0,
+            cached_content_token_count=0,
+        ),
+    )
+
+
 class FakeModels:
-    def __init__(self, responses: list[object]) -> None:
+    def __init__(self, responses: list[object], stream_chunks: list[object] | None = None) -> None:
         self._responses = list(responses)
+        self._stream_chunks = list(stream_chunks or [])
         self.calls: list[str] = []
 
     async def generate_content(self, *, model, contents, config):
@@ -42,6 +60,16 @@ class FakeModels:
         if isinstance(result, Exception):
             raise result
         return result
+
+    async def generate_content_stream(self, *, model, contents, config):
+        self.calls.append(model)
+        chunks = self._stream_chunks
+
+        async def _gen():
+            for chunk in chunks:
+                yield chunk
+
+        return _gen()
 
 
 @dataclass
@@ -166,3 +194,45 @@ async def test_resource_exhausted_falls_back_to_configured_fallback_model(test_s
     assert resp.fallback_from == test_settings.model_executor
     assert limiter.acquired == [test_settings.model_executor, test_settings.model_fallback_executor]
     assert llm_calls.rows[0]["fallback_from"] == test_settings.model_executor
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_delivers_deltas_and_records_usage(test_settings) -> None:
+    from relay_core.llm.profiles import EXECUTOR
+
+    client = FakeClient(
+        aio=FakeAio(
+            models=FakeModels(
+                [],
+                stream_chunks=[
+                    _chunk("Hel"),
+                    _chunk("lo", prompt_tokens=8, output_tokens=3),
+                ],
+            )
+        )
+    )
+    gateway, llm_calls, limiter = _gateway(
+        client, pricing={test_settings.model_executor: Decimal("1.0")}
+    )
+
+    deltas: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        deltas.append(text)
+
+    resp = await gateway.generate_stream(
+        role=EXECUTOR,
+        system="s",
+        contents="c",
+        workspace_id=uuid.uuid4(),
+        on_delta=on_delta,
+        settings=test_settings,
+    )
+
+    assert deltas == ["Hel", "lo"]
+    assert resp.text == "Hello"
+    assert resp.usage.input_tokens == 8
+    assert resp.usage.output_tokens == 3
+    assert len(llm_calls.rows) == 1
+    assert llm_calls.rows[0]["status"] == "ok"
+    assert limiter.acquired == [test_settings.model_executor]

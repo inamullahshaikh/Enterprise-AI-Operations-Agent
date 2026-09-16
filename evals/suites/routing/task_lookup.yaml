@@ -1,0 +1,7 @@
+key: routing_task_lookup
+suite: routing
+connector_profile: db_only
+message: "Which customers have subscriptions ending this month?"
+expectations:
+  route: task
+tags: [routing, task]

@@ -1,0 +1,10 @@
+key: text_to_sql_subscriptions_ending_this_month
+suite: text_to_sql
+connector_profile: db_only
+message: "Which customers have subscriptions ending this month?"
+expectations:
+  route: task
+  reference_sql: >
+    SELECT a.name FROM subscriptions s JOIN accounts a ON a.id = s.account_id
+    WHERE date_trunc('month', s.end_date) = date_trunc('month', CURRENT_DATE)
+tags: [text_to_sql]

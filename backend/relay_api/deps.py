@@ -1,8 +1,10 @@
-"""Shared FastAPI dependencies: settings/session wiring, auth, and workspace
-membership/RBAC (docs/system-design.md section 28, "Phase 1 - Foundation").
+"""Shared FastAPI dependencies: settings/session wiring, auth, workspace
+membership/RBAC (docs/system-design.md section 28, "Phase 1 - Foundation"), and
+the LLM gateway / agent-run dispatch wiring added in "Phase 2 - Agent core".
 """
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import cast
@@ -15,21 +17,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay_core.config import Settings, get_settings
 from relay_core.db.models.identity import User, WorkspaceMember
-from relay_core.db.repositories.llm_calls import LLMCallRepository, ModelPricingRepository
 from relay_core.db.repositories.users import UserRepository
 from relay_core.db.repositories.workspaces import WorkspaceMemberRepository
 from relay_core.db.session import get_session
-from relay_core.llm.gateway import LLMGateway
-from relay_core.llm.ratelimit import RedisRateLimiter
+from relay_core.llm.gateway import LLMGateway, build_llm_gateway
+from relay_core.security.crypto import LocalKMS, build_kms
 from relay_core.security.jwt import InvalidAccessToken, decode_access_token
 from relay_core.security.rbac import has_at_least
+from relay_core.storage.object_store import ObjectStore, build_object_store
 
 __all__ = [
     "CurrentUser",
+    "RunDispatcher",
     "get_current_user",
     "get_genai_client",
+    "get_kms",
     "get_llm_gateway",
+    "get_object_store",
     "get_redis",
+    "get_run_dispatcher",
     "get_settings_dep",
     "require_non_prod",
     "require_workspace_role",
@@ -73,13 +79,38 @@ def get_llm_gateway(
     redis: Redis = Depends(get_redis),
     settings: Settings = Depends(get_settings_dep),
 ) -> LLMGateway:
-    limiter = RedisRateLimiter(redis, rpm_limit=settings.gemini_rpm_limit)
-    return LLMGateway(
-        client,
-        limiter=limiter,
-        llm_calls=LLMCallRepository(session),
-        pricing=ModelPricingRepository(session),
-    )
+    return build_llm_gateway(session, redis, settings, client=client)
+
+
+def get_object_store(settings: Settings = Depends(get_settings_dep)) -> ObjectStore:
+    return build_object_store(settings)
+
+
+def get_kms(settings: Settings = Depends(get_settings_dep)) -> LocalKMS:
+    return build_kms(settings)
+
+
+RunDispatcher = Callable[[uuid.UUID, uuid.UUID], Awaitable[None]]
+
+
+def get_run_dispatcher() -> RunDispatcher:
+    """Enqueues a queued `agent_runs` row for the worker to pick up. Kept as its
+    own dependency (rather than calling `run_agent.delay(...)` straight from the
+    router) so integration tests can override it to run the agent graph inline
+    against the test database/Redis instead of needing a real Celery worker.
+
+    Takes `workspace_id` explicitly (not just `run_id`) because every repository
+    lookup in this codebase is tenant-scoped by construction (`WorkspaceScopedRepository`,
+    docs/system-design.md section 14.4) — the worker has no way to look up a run
+    by id alone, so the id it needs is handed to it here instead.
+    """
+
+    async def _dispatch(workspace_id: uuid.UUID, run_id: uuid.UUID) -> None:
+        from relay_worker.tasks.agent import run_agent
+
+        run_agent.delay(str(workspace_id), str(run_id))
+
+    return _dispatch
 
 
 async def get_current_user(

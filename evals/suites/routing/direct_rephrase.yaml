@@ -1,0 +1,7 @@
+key: routing_direct_rephrase
+suite: routing
+connector_profile: none
+message: "Can you say that in one sentence?"
+expectations:
+  route: direct
+tags: [routing, direct]

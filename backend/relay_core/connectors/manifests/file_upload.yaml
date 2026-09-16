@@ -1,0 +1,13 @@
+# docs/system-design.md section 10.8. Auto-installed in every workspace (no
+# connector_installations row, no config/secrets) rather than something an admin installs —
+# see relay_core/capabilities/resolver.py and relay_core/tools/registry.py.
+key: file_upload
+display_name: File uploads
+category: generic
+description: Read CSV files attached to the conversation. Always available, no setup required.
+auth_type: none
+config_schema: {}
+secrets_schema: {}
+provides_capabilities:
+  - file.read
+docs_url: null

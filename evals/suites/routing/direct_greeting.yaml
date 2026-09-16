@@ -1,0 +1,7 @@
+key: routing_direct_greeting
+suite: routing
+connector_profile: none
+message: "Hey, thanks for the help earlier!"
+expectations:
+  route: direct
+tags: [routing, direct]

@@ -1,0 +1,10 @@
+key: text_to_sql_initech_plan
+suite: text_to_sql
+connector_profile: db_only
+message: "What subscription plan is Initech on?"
+expectations:
+  route: task
+  reference_sql: >
+    SELECT s.plan FROM subscriptions s JOIN accounts a ON a.id = s.account_id
+    WHERE a.name = 'Initech'
+tags: [text_to_sql]

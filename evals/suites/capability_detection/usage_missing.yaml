@@ -1,0 +1,8 @@
+key: capability_detection_usage_missing
+suite: capability_detection
+connector_profile: none
+message: "Rank our expiring customers by product usage."
+expectations:
+  route: task
+  missing_capabilities: [subscription.read, usage.read]
+tags: [capability_detection]
