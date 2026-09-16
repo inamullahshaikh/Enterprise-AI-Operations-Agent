@@ -7,6 +7,7 @@ dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
   "pydantic>=2.9",
+  "email-validator>=2.2",
   "pydantic-settings>=2.5",
   "sqlalchemy[asyncio]>=2.0",
   "asyncpg>=0.29",
@@ -57,6 +58,24 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's DI relies on `Depends(...)`/`Path(...)`/`Query(...)` etc. as argument
+# defaults; B008 doesn't know these are meant to be evaluated once at import
+# time, so they're marked immutable rather than triggering on every route.
+# `require_workspace_role(...)` (relay_api/deps.py) is the same pattern: a
+# parameterized dependency factory called once per route definition, not per
+# request.
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.Path",
+  "fastapi.Query",
+  "fastapi.Body",
+  "fastapi.Header",
+  "fastapi.Cookie",
+  "fastapi.Security",
+  "relay_api.deps.require_workspace_role",
+]
 
 [tool.mypy]
 python_version = "3.12"

@@ -1,22 +1,25 @@
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from alembic import context
 from relay_core.config import get_settings
-
-# from relay_core.db.base import Base  # noqa: ERA001 -- uncomment once models exist
+from relay_core.db import models  # noqa: F401 -- populates Base.metadata
+from relay_core.db.base import Base
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# A caller that already set sqlalchemy.url (e.g. tests pointing this at a
+# testcontainers Postgres) is left alone; only the CLI's empty default from
+# alembic.ini falls back to app settings.
+if not config.get_main_option("sqlalchemy.url"):
+    config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
-target_metadata = None  # Phase 1: set to Base.metadata once relay_core.db.base exists
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

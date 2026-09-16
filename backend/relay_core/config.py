@@ -20,16 +20,25 @@ class Settings(BaseSettings):
     database_url: str
     langgraph_db_url: str
     redis_url: str
-    s3_endpoint_url: str | None = None
-    s3_bucket: str = "relay"
-    s3_access_key: str | None = None
-    s3_secret_key: str | None = None
+
+    # Object storage — Cloudflare R2 (S3-compatible API), used in every environment.
+    # boto3 clients must be created with region_name="auto" and addressing_style="path".
+    r2_account_id: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    r2_bucket: str = "relay"
+    r2_endpoint_url: str = ""
 
     # Auth
     jwt_private_key_path: str = "/secrets/jwt_ed25519.pem"
     jwt_public_key_path: str = "/secrets/jwt_ed25519.pub"
     access_token_ttl_min: int = 15
     refresh_token_ttl_days: int = 14
+
+    # Google Sign-In (user login, alongside email/password). Reused with broader
+    # scopes by the Gmail/Calendar connector at install time (docs/adr/0007).
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: str | None = None
 
     # Encryption
     kms_provider: Literal["local", "aws"] = "local"
@@ -57,20 +66,9 @@ class Settings(BaseSettings):
     sandbox_timeout_s: float = 30.0
     web_search_provider: str = "tavily"
     web_search_api_key: str | None = None
-    google_oauth_client_id: str | None = None
-    google_oauth_client_secret: str | None = None
-    hubspot_client_id: str | None = None
-    hubspot_client_secret: str | None = None
     use_mock_connectors: bool = True
-
-    # Observability
-    langfuse_host: str | None = None
-    langfuse_public_key: str | None = None
-    langfuse_secret_key: str | None = None
-    otel_exporter_otlp_endpoint: str | None = None
-    sentry_dsn: str | None = None
 
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]
+    return Settings()

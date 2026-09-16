@@ -16,7 +16,12 @@ seed:
 	docker compose exec api python -m relay_worker.tasks.maintenance seed_demo
 
 test:
-	docker compose exec api pytest
+	docker compose exec api pytest tests/unit
+	# Integration tests use testcontainers, which needs to talk to a Docker
+	# daemon directly — they run on the host (same as in CI), not inside the
+	# `api` container, which deliberately has no Docker socket mounted. Requires
+	# `pip install -e ".[dev]"` in backend/ on the host once.
+	cd backend && pytest tests/integration
 	cd frontend && npm test --if-present
 
 lint:

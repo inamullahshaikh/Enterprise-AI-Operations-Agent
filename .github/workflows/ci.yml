@@ -51,6 +51,24 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: pytest tests/unit
 
+  integration-tests:
+    # testcontainers needs a Docker daemon, which GitHub-hosted ubuntu-latest
+    # runners provide natively — no docker-compose service or socket mount
+    # needed here, unlike the sandbox service (see docs/system-design.md section
+    # 23 for why the sandbox never gets Docker access).
+    runs-on: ubuntu-latest
+    needs: [lint-backend]
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/integration
+
   security:
     runs-on: ubuntu-latest
     steps:

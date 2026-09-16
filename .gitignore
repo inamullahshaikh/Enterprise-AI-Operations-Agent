@@ -45,4 +45,4 @@ build/
 
 # --- Local data volumes ---
 pgdata/
-minio-data/
+*.ps1

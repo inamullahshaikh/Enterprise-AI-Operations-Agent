@@ -8,6 +8,6 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-# Phase 5 (docs/system-design.md section 21.2) adds deterministic fake HubSpot,
-# Gmail, Calendar, and web-search endpoints here, used for local dev and for
-# reproducible, free eval runs.
+# Phase 5 (docs/system-design.md section 21.2) adds deterministic fake Gmail,
+# Calendar, and web-search endpoints here, used for local dev and for
+# reproducible, free eval runs. HubSpot is out of scope (docs/adr/0006).
