@@ -331,7 +331,7 @@ async def test_connector(
             status.HTTP_400_BAD_REQUEST, f"Unknown connector {installation.connector_key!r}"
         )
 
-    secrets = await installation_secrets(session, kms, installation)
+    secrets = await installation_secrets(session, kms, installation, settings)
     ctx = installation_context(workspace_id, current.user.id, installation, secrets)
     try:
         healthy, message = await connector_cls().health_check(ctx)

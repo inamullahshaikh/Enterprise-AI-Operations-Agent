@@ -68,7 +68,5 @@ class WorkspacePolicy(Base):
     data_retention_days: Mapped[int] = mapped_column(
         Integer, nullable=False, default=90, server_default="90"
     )
-    updated_by: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id")
-    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default="now()")

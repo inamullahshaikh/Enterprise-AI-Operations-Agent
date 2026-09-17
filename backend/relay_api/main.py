@@ -9,6 +9,7 @@ from relay_api.routers import (
     conversations,
     debug,
     documents,
+    oauth,
     runs,
     tools,
     workspaces,
@@ -28,6 +29,8 @@ app.include_router(conversations.router, prefix="/api/v1")
 app.include_router(runs.router, prefix="/api/v1")
 app.include_router(connectors.router, prefix="/api/v1")
 app.include_router(connectors.catalog_router, prefix="/api/v1")
+app.include_router(oauth.router, prefix="/api/v1")
+app.include_router(oauth.callback_router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
 app.include_router(approvals.router, prefix="/api/v1")
 app.include_router(tools.router, prefix="/api/v1")

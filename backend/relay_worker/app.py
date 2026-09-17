@@ -35,6 +35,13 @@ app.conf.beat_schedule = {
         "task": "relay_worker.tasks.connectors.sync_all_installations",
         "schedule": 6 * 3600.0,
     },
+    # Google access tokens live an hour. Five minutes against a fifteen-minute horizon means a
+    # token is renewed well before anything reaches for it, and a revoked grant shows up on the
+    # connector page within minutes instead of at the next run.
+    "refresh-oauth-tokens": {
+        "task": "relay_worker.tasks.connectors.refresh_oauth_tokens",
+        "schedule": 300.0,
+    },
 }
 
 from relay_worker.tasks import (  # noqa: E402, F401 -- registers tasks

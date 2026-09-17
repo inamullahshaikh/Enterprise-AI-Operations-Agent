@@ -139,9 +139,7 @@ async def decide_approval(
     await session.commit()
     await dispatch(workspace_id, approval.run_id, decision)
 
-    return DecisionResponse(
-        approval_id=approval.id, status=decided_status, run_id=approval.run_id
-    )
+    return DecisionResponse(approval_id=approval.id, status=decided_status, run_id=approval.run_id)
 
 
 def _approved_ids(approval: Approval, body: DecisionRequest) -> list[uuid.UUID]:

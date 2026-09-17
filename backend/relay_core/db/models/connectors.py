@@ -81,3 +81,7 @@ class ConnectorCredential(Base, TimestampMixin):
     nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     encrypted_dek: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     kms_key_id: Mapped[str] = mapped_column(String, nullable=False)
+    # Outside the encrypted blob so the refresh sweep can find expiring installations without
+    # decrypting every credential (docs/system-design.md section 18.3 step 6). Null for every
+    # connector that doesn't use OAuth.
+    oauth_expires_at: Mapped[datetime | None]

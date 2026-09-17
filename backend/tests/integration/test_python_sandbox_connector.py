@@ -120,9 +120,7 @@ async def test_run_python_uploads_output_files_as_artifacts(
                 },
             )
         )
-        result = await connector.call_tool(
-            ctx, "run_python", {"code": "plt.savefig('chart.png')"}
-        )
+        result = await connector.call_tool(ctx, "run_python", {"code": "plt.savefig('chart.png')"})
 
     assert len(result.artifacts) == 1
     assert result.artifacts[0].endswith("chart.png")

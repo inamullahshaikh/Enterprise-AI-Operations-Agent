@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from relay_core.capabilities.tagger import TagResult, tag_tools
 from relay_core.config import Settings, get_settings
 from relay_core.connectors.base import ExecutionContext
+from relay_core.connectors.oauth import refresh_if_expiring
 from relay_core.connectors.registry import CONNECTOR_TYPES
 from relay_core.db.models.connectors import ConnectorInstallation
 from relay_core.db.models.tools import ToolDefinition
@@ -79,12 +80,21 @@ def installation_context(
 
 
 async def installation_secrets(
-    session: AsyncSession, kms: LocalKMS, installation: ConnectorInstallation
+    session: AsyncSession,
+    kms: LocalKMS,
+    installation: ConnectorInstallation,
+    settings: Settings | None = None,
 ) -> dict[str, str]:
+    """The one place a connector's secrets are loaded, which is why the OAuth refresh hangs off
+    it: health checks, discovery, the sweep and every tool call go through here, so none of them
+    can be handed an expired access token (Phase 7 A4)."""
     credential = await ConnectorCredentialRepository(session).get(
         installation.workspace_id, installation.id
     )
-    return decrypt_secrets(kms, credential) if credential is not None else {}
+    if credential is None:
+        return {}
+    secrets = decrypt_secrets(kms, credential)
+    return await refresh_if_expiring(session, kms, installation, credential, secrets, settings)
 
 
 def llm_name(slug: str, tool_name: str) -> str:
@@ -124,7 +134,7 @@ async def sync_installation(
     the error. Callers that loop over installations can therefore just keep going."""
     workspace_id = installation.workspace_id
     try:
-        secrets = await installation_secrets(session, kms, installation)
+        secrets = await installation_secrets(session, kms, installation, settings)
         ctx = installation_context(workspace_id, installation.installed_by, installation, secrets)
         specs = await CONNECTOR_TYPES[installation.connector_key]().list_tools(ctx)
     except Exception as exc:  # noqa: BLE001 - recorded on the installation, not raised

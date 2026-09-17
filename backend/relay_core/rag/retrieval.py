@@ -137,7 +137,5 @@ async def _rerank(
         return candidates  # fall back to RRF order rather than fail retrieval outright
 
     relevance_by_index = {s.index: s.relevance for s in verdict.scores}
-    scored = [
-        (chunk, relevance_by_index.get(i, 0.0)) for i, (chunk, _rrf) in enumerate(candidates)
-    ]
+    scored = [(chunk, relevance_by_index.get(i, 0.0)) for i, (chunk, _rrf) in enumerate(candidates)]
     return sorted(scored, key=lambda pair: pair[1], reverse=True)

@@ -318,9 +318,7 @@ async def test_hybrid_search_skips_rerank_when_the_fused_list_is_small(
         ],
     )
 
-    gateway = _gateway(
-        db_session, redis_client, test_settings, _ScriptedClient([_unit_vector(0)])
-    )
+    gateway = _gateway(db_session, redis_client, test_settings, _ScriptedClient([_unit_vector(0)]))
     results = await hybrid_search(
         chunk_repo=DocumentChunkRepository(db_session),
         document_repo=DocumentRepository(db_session),

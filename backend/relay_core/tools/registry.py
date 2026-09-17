@@ -41,10 +41,10 @@ from relay_core.db.repositories.policies import WorkspacePolicyRepository
 from relay_core.db.repositories.tool_calls import ToolCallRepository
 from relay_core.db.repositories.tool_definitions import ToolDefinitionRepository
 from relay_core.llm.gateway import LLMGateway
-from relay_core.security.credential_codec import decrypt_secrets
 from relay_core.security.crypto import LocalKMS
 from relay_core.storage.object_store import ObjectStore
 from relay_core.tools.sanitizer import sanitize_schema
+from relay_core.tools.sync import installation_secrets
 
 
 @dataclass(frozen=True)
@@ -189,10 +189,9 @@ class ToolRegistry:
             if connector_cls is None:
                 continue
             if installation.id not in contexts:
-                secrets: dict[str, str] = {}
-                credential = await self.credentials.get(workspace_id, installation.id)
-                if credential is not None:
-                    secrets = decrypt_secrets(self.kms, credential)
+                secrets = await installation_secrets(
+                    self.session, self.kms, installation, self.settings
+                )
                 contexts[installation.id] = (
                     connector_cls(),
                     ExecutionContext(

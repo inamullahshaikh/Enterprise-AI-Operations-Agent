@@ -1,5 +1,11 @@
 """Connector jobs.
 
+`refresh_oauth_tokens` runs every five minutes (`refresh-oauth-tokens`) and renews any Google
+token expiring within fifteen. Tool calls refresh lazily too (`installation_secrets`), so this
+sweep exists for the case a lazy refresh can't cover: nobody uses the installation for a while,
+its refresh token gets revoked, and an admin should learn that from the connector page rather
+than from a run failing.
+
 `sync_all_installations` runs every six hours on Celery beat (`sync-connector-tools`) and once via
 `make sync-tools`, which is also how a dev database created before `tool_definitions` existed gets
 its rows backfilled. For each active installation in every workspace it re-checks health, then
@@ -9,14 +15,18 @@ review, and an installation that was down but has recovered is healthy again.
 
 import asyncio
 import logging
+from datetime import UTC, datetime, timedelta
 
 from redis.asyncio import Redis
 
 from relay_core.config import get_settings
+from relay_core.connectors.oauth import SWEEP_MARGIN_S, refresh_if_expiring
 from relay_core.connectors.registry import CONNECTOR_TYPES
+from relay_core.db.repositories.connector_credentials import ConnectorCredentialRepository
 from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.db.session import get_sessionmaker
 from relay_core.llm.gateway import build_llm_gateway
+from relay_core.security.credential_codec import decrypt_secrets
 from relay_core.security.crypto import build_kms
 from relay_core.tools.sync import installation_context, installation_secrets, sync_installation
 from relay_worker.app import app
@@ -40,7 +50,7 @@ async def _sync_all_installations_async() -> None:
             for installation in await installations.list_active_across_workspaces():
                 label = f"{installation.workspace_id}/{installation.slug}"
                 try:
-                    secrets = await installation_secrets(session, kms, installation)
+                    secrets = await installation_secrets(session, kms, installation, settings)
                     ctx = installation_context(
                         installation.workspace_id, installation.installed_by, installation, secrets
                     )
@@ -66,6 +76,37 @@ async def _sync_all_installations_async() -> None:
                     logger.exception("Tool sync failed for %s", label)
     finally:
         await redis.aclose()
+
+
+@app.task(name="relay_worker.tasks.connectors.refresh_oauth_tokens")  # type: ignore[untyped-decorator]
+def refresh_oauth_tokens() -> None:
+    asyncio.run(_refresh_oauth_tokens_async())
+
+
+async def _refresh_oauth_tokens_async() -> None:
+    settings = get_settings()
+    kms = build_kms(settings)
+    async with get_sessionmaker()() as session:
+        credentials = ConnectorCredentialRepository(session)
+        horizon = datetime.now(UTC) + timedelta(seconds=SWEEP_MARGIN_S)
+        for credential, installation in await credentials.list_expiring_across_workspaces(horizon):
+            label = f"{installation.workspace_id}/{installation.slug}"
+            try:
+                await refresh_if_expiring(
+                    session,
+                    kms,
+                    installation,
+                    credential,
+                    decrypt_secrets(kms, credential),
+                    settings,
+                    margin_s=SWEEP_MARGIN_S,
+                )
+                # Committed per installation, so one dead grant never rolls back another's
+                # freshly refreshed token.
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                logger.exception("OAuth refresh failed for %s", label)
 
 
 if __name__ == "__main__":

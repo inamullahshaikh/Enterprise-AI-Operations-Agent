@@ -4,6 +4,11 @@ JWT access tokens are EdDSA-signed, live 15 minutes, and carry only `sub`
 (user id), `iat`, `exp`, and `jti` — no roles. Workspace roles are looked up from
 `workspace_members` on every request instead, so revoking a member's access takes
 effect immediately rather than waiting out a token's lifetime.
+
+`create_state_token`/`decode_state_token` sign short-lived OAuth `state` parameters
+(Phase 7 A3) with the same key rather than introducing a second signing scheme. They
+carry a `typ` claim, and each decoder checks it, so an access token can never be
+replayed as a state parameter or the other way round.
 """
 
 import uuid
@@ -17,6 +22,10 @@ from relay_core.config import Settings, get_settings
 
 
 class InvalidAccessToken(Exception):
+    pass
+
+
+class InvalidStateToken(Exception):
     pass
 
 
@@ -70,3 +79,25 @@ def decode_access_token(token: str, *, settings: Settings | None = None) -> Acce
         )
     except (KeyError, ValueError) as exc:
         raise InvalidAccessToken("malformed claims") from exc
+
+
+def create_state_token(
+    claims: dict[str, str], *, ttl_s: int = 600, settings: Settings | None = None
+) -> str:
+    settings = settings or get_settings()
+    now = datetime.now(UTC)
+    payload = {**claims, "typ": "oauth_state", "iat": now, "exp": now + timedelta(seconds=ttl_s)}
+    return jwt.encode(payload, _load_private_key(settings.jwt_private_key_path), algorithm="EdDSA")
+
+
+def decode_state_token(token: str, *, settings: Settings | None = None) -> dict[str, str]:
+    settings = settings or get_settings()
+    try:
+        payload = jwt.decode(
+            token, _load_public_key(settings.jwt_public_key_path), algorithms=["EdDSA"]
+        )
+    except jwt.PyJWTError as exc:
+        raise InvalidStateToken(str(exc)) from exc
+    if payload.get("typ") != "oauth_state":
+        raise InvalidStateToken("not a state token")
+    return payload

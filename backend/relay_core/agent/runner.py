@@ -96,9 +96,7 @@ async def run_agent_once(
     gateway: LLMGateway | None = None,
     object_store: ObjectStore | None = None,
 ) -> None:
-    deps = build_agent_deps(
-        session, redis, settings, gateway=gateway, object_store=object_store
-    )
+    deps = build_agent_deps(session, redis, settings, gateway=gateway, object_store=object_store)
     runs = deps.runs
     messages = deps.messages
     events = deps.events
@@ -173,9 +171,7 @@ async def resume_agent_once(
     decide` refuses to overwrite a decision, and this refuses to resume a run that isn't parked,
     so neither a retried Celery task nor a double-submitted decision replays an approved write.
     """
-    deps = build_agent_deps(
-        session, redis, settings, gateway=gateway, object_store=object_store
-    )
+    deps = build_agent_deps(session, redis, settings, gateway=gateway, object_store=object_store)
     run = await deps.runs.get(workspace_id, run_id)
     if run is None:
         logger.error(

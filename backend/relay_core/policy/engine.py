@@ -25,7 +25,7 @@ _ELEVATED_ROLES = frozenset({"owner", "admin"})
 
 
 class ItemCountThreshold(BaseModel):
-    """"Approve automatically unless this argument carries more than `max_items` entries" —
+    """ "Approve automatically unless this argument carries more than `max_items` entries" —
     section 13.4's "> 5 recipients" example. A missing or non-list argument counts as 0."""
 
     arg: str
