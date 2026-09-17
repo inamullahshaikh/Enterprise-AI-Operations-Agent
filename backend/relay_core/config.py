@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     # `seed_demo` and the eval harness when they install those connectors; an installation
     # stores its own `base_url`, so nothing in the request path reads this.
     mock_services_url: str = "http://mock-services:8100"
+    # Exact hostnames `relay_core.security.ssrf` lets through to private addresses — the dev
+    # stack's own services. Set as a JSON list, e.g. ["mock-services","mcp-ticketing"].
+    ssrf_allowed_hosts: list[str] = []
 
 
 @lru_cache
