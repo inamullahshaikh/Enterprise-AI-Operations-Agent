@@ -9,13 +9,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from google.genai import types
 from pydantic import BaseModel
 
 from relay_core.agent.deps import AgentDeps
+from relay_core.agent.nodes.execute_step import build_function_response_content
 from relay_core.agent.nodes.guard_input import GuardInput, GuardVerdict
 from relay_core.agent.nodes.plan import PlanNode
 from relay_core.agent.nodes.route import Route, RouteVerdict
 from relay_core.agent.state import AgentState, Plan, PlanStep
+from relay_core.connectors.base import ToolResult
 from relay_core.llm.schemas import LLMResponse, Usage
 
 pytestmark = pytest.mark.asyncio
@@ -52,7 +55,7 @@ def _deps(gateway: FakeGateway) -> AgentDeps:
         runs=None,  # type: ignore[arg-type]
         llm_calls=None,  # type: ignore[arg-type]
         tool_calls=None,  # type: ignore[arg-type]
-        connector_installations=None,  # type: ignore[arg-type]
+        tool_definitions=None,  # type: ignore[arg-type]
         attachments=None,  # type: ignore[arg-type]
         documents=None,  # type: ignore[arg-type]
         tool_registry=None,  # type: ignore[arg-type]
@@ -145,3 +148,37 @@ async def test_plan_node_returns_the_parsed_plan_and_publishes_it() -> None:
 
     assert result["plan"] == plan
     assert published[0][1] == "plan.created"
+
+
+async def test_plan_prompt_lists_the_workspaces_custom_capabilities() -> None:
+    class Sink:
+        async def publish(self, *args: Any) -> None:
+            pass
+
+        async def set_plan(self, *args: Any) -> None:
+            pass
+
+    gateway = FakeGateway(parsed=Plan(objective="Open tickets", steps=[]))
+    deps = _deps(gateway)
+    deps.events = Sink()  # type: ignore[assignment]
+    deps.runs = Sink()  # type: ignore[assignment]
+    state = _state("Which tickets are open?").model_copy(
+        update={"available_capabilities": ["custom.ticket.read", "sql.query"]}
+    )
+
+    await PlanNode(deps)(state)
+
+    system = gateway.calls[0]["system"]
+    assert "custom.ticket.read — Workspace-specific" in system
+    assert "sql.query — Workspace-specific" not in system
+
+
+async def test_function_response_caps_what_the_model_sees_of_a_tool_result() -> None:
+    call = types.FunctionCall(name="db__run_sql", args={})
+    content = build_function_response_content([call], [ToolResult(ok=True, content="x" * 30_000)])
+
+    assert content.parts is not None and content.parts[0].function_response is not None
+    response = content.parts[0].function_response.response or {}
+    assert response["truncated"] is True
+    assert len(response["result"]) < 20_100
+    assert response["result"].endswith("</tool_output>")

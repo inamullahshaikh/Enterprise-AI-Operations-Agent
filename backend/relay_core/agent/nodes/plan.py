@@ -43,8 +43,12 @@ class PlanNode:
         self.deps = deps
 
     async def __call__(self, state: AgentState) -> dict[str, Any]:
+        # Custom capabilities (`custom.*`, from MCP/OpenAPI tool tagging) have no taxonomy entry,
+        # so the planner could never require one unless the workspace's own are listed too.
+        custom = [c for c in state.available_capabilities if c.startswith("custom.")]
+        catalog = "\n".join([render_catalog(), *(f"{c} — Workspace-specific" for c in custom)])
         system = _SYSTEM_PROMPT.format(
-            capability_catalog=render_catalog(),
+            capability_catalog=catalog,
             available_capabilities=", ".join(state.available_capabilities) or "(none)",
             max_steps=_MAX_STEPS,
         )

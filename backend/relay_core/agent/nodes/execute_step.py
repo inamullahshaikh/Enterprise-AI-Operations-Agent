@@ -41,6 +41,8 @@ from relay_core.policy import ApprovalRules, needs_approval
 from relay_core.tools.registry import BoundTool, BoundToolSet
 
 _MAX_ITERS = 8
+# What the model sees of one tool result; `tool_calls.output` still stores all of it.
+_MAX_TOOL_OUTPUT_CHARS = 20_000
 
 _SYSTEM_PROMPT = """\
 You are executing ONE step of a plan for Relay, an operations agent inside a company workspace.
@@ -277,10 +279,8 @@ def build_function_response_content(
     parts = []
     for call, result in zip(calls, results, strict=True):
         if result.ok:
-            response: dict[str, Any] = {
-                "result": _wrap_untrusted(call.name, result.content),
-                "truncated": result.truncated,
-            }
+            text, cut = _wrap_untrusted(call.name, result.content)
+            response: dict[str, Any] = {"result": text, "truncated": result.truncated or cut}
         else:
             response = {"error": result.error}
         parts.append(types.Part.from_function_response(name=call.name or "", response=response))
@@ -291,6 +291,10 @@ def build_function_response_content(
     return types.Content(role="user", parts=parts)
 
 
-def _wrap_untrusted(source: str | None, content: Any) -> str:
+def _wrap_untrusted(source: str | None, content: Any) -> tuple[str, bool]:
+    """Returns the wrapped text and whether it was cut to `_MAX_TOOL_OUTPUT_CHARS`. The cut
+    happens before wrapping, so the closing tag always survives."""
     text = json.dumps(content, default=str)
-    return f'<tool_output source="{source}" trust="untrusted">\n{text}\n</tool_output>'
+    cut = len(text) > _MAX_TOOL_OUTPUT_CHARS
+    text = text[:_MAX_TOOL_OUTPUT_CHARS]
+    return f'<tool_output source="{source}" trust="untrusted">\n{text}\n</tool_output>', cut

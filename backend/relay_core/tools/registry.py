@@ -1,9 +1,15 @@
 """The tool registry (docs/system-design.md section 6.7): resolves a plan step's requested
-capabilities to actual callable tools, normalizing built-ins into the `{slug}__{tool_name}`
-naming scheme every Gemini function declaration needs (section 6.6). No tool-count `limit` or
-vector-ranking `query` yet — both are Phase 6 once embedding-based tool retrieval and large
-tool counts (MCP/OpenAPI) actually make that necessary (docs/adr/0009); Phase 3 has two
-connector types with a handful of tools each.
+capabilities to actual callable tools.
+
+Installed connectors bind from their `tool_definitions` rows (Phase 6), so a tool discovered at
+runtime is callable with no code change: the row carries the `{slug}__{tool_name}` function name
+(section 6.6), the spec, and the admin's enable/disable and risk decisions. For each requested
+capability only the best-priority installation providing it wins (section 7.2 rule 2), and a row
+binds when its installation wins at least one requested capability it provides.
+
+The always-available connectors (`file_upload`, `documents`, `python_sandbox`) have no
+installation and no rows, so they still bind live from `list_tools`. No tool-count `limit` or
+vector-ranking `query` yet (Phase 6 C3).
 """
 
 import uuid
@@ -14,30 +20,24 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay_core.config import Settings
-from relay_core.connectors.base import Connector, ExecutionContext, ToolSpec
+from relay_core.connectors.base import Connector, ExecutionContext, Risk, ToolSpec
 from relay_core.connectors.builtin.documents import DocumentsConnector
 from relay_core.connectors.builtin.file_upload import FileUploadConnector
 from relay_core.connectors.builtin.python_sandbox import PythonSandboxConnector
-from relay_core.connectors.manifest import load_manifests
 from relay_core.connectors.registry import CONNECTOR_TYPES
 from relay_core.db.repositories.attachments import AttachmentRepository
 from relay_core.db.repositories.collections import CollectionRepository
 from relay_core.db.repositories.connector_credentials import ConnectorCredentialRepository
-from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.db.repositories.document_chunks import DocumentChunkRepository
 from relay_core.db.repositories.documents import DocumentRepository
 from relay_core.db.repositories.policies import WorkspacePolicyRepository
 from relay_core.db.repositories.tool_calls import ToolCallRepository
+from relay_core.db.repositories.tool_definitions import ToolDefinitionRepository
 from relay_core.llm.gateway import LLMGateway
 from relay_core.security.credential_codec import decrypt_secrets
 from relay_core.security.crypto import LocalKMS
 from relay_core.storage.object_store import ObjectStore
 from relay_core.tools.sanitizer import sanitize_schema
-
-# Always-available connectors (no installation row): bound on every run regardless of what's
-# requested from them (matching relay_api.routers.connectors._ALWAYS_AVAILABLE_KEYS), so they
-# never compete with an admin-installed connector of the same manifest key.
-_ALWAYS_AVAILABLE_KEYS = frozenset({"file_upload", "documents", "python_sandbox"})
 
 
 @dataclass(frozen=True)
@@ -91,7 +91,7 @@ class ToolRegistry:
         self.kms = kms
         self.gateway = gateway
         self.settings = settings
-        self.installations = ConnectorInstallationRepository(session)
+        self.tool_definitions = ToolDefinitionRepository(session)
         self.credentials = ConnectorCredentialRepository(session)
         self.attachments = AttachmentRepository(session)
         self.collections = CollectionRepository(session)
@@ -110,7 +110,6 @@ class ToolRegistry:
         capabilities: list[str],
     ) -> BoundToolSet:
         requested = set(capabilities)
-        manifests = load_manifests()
         bound: list[BoundTool] = []
 
         # Read once per run and handed to every connector, rather than per call: these are
@@ -160,34 +159,56 @@ class ToolRegistry:
             await self._bind(sandbox_connector, "python_sandbox", None, sandbox_ctx, requested)
         )
 
-        provider_keys = {
-            key
-            for key, manifest in manifests.items()
-            if key not in _ALWAYS_AVAILABLE_KEYS and requested & set(manifest.provides_capabilities)
-        }
-        for installation in await self.installations.list_active_by_connector_keys(
-            workspace_id, provider_keys
-        ):
+        rows = await self.tool_definitions.list_bindable(workspace_id, requested)
+        # Rows arrive best priority first, so the first installation seen per capability wins.
+        winners: dict[str, uuid.UUID] = {}
+        for row, installation in rows:
+            for capability in requested.intersection(row.capabilities):
+                winners.setdefault(capability, installation.id)
+
+        contexts: dict[uuid.UUID, tuple[Connector, ExecutionContext]] = {}
+        for row, installation in rows:
+            if not any(
+                winners[c] == installation.id for c in requested.intersection(row.capabilities)
+            ):
+                continue
             connector_cls = CONNECTOR_TYPES.get(installation.connector_key)
             if connector_cls is None:
                 continue
-            secrets: dict[str, str] = {}
-            credential = await self.credentials.get(workspace_id, installation.id)
-            if credential is not None:
-                secrets = decrypt_secrets(self.kms, credential)
-            ctx = ExecutionContext(
-                workspace_id=workspace_id,
-                user_id=user_id,
-                run_id=run_id,
-                conversation_id=conversation_id,
-                installation_id=str(installation.id),
-                config=installation.config,
-                secrets=secrets,
-                policy=policy_values,
-            )
-            bound.extend(
-                await self._bind(
-                    connector_cls(), installation.slug, installation.id, ctx, requested
+            if installation.id not in contexts:
+                secrets: dict[str, str] = {}
+                credential = await self.credentials.get(workspace_id, installation.id)
+                if credential is not None:
+                    secrets = decrypt_secrets(self.kms, credential)
+                contexts[installation.id] = (
+                    connector_cls(),
+                    ExecutionContext(
+                        workspace_id=workspace_id,
+                        user_id=user_id,
+                        run_id=run_id,
+                        conversation_id=conversation_id,
+                        installation_id=str(installation.id),
+                        config=installation.config,
+                        secrets=secrets,
+                        policy=policy_values,
+                    ),
+                )
+            connector, ctx = contexts[installation.id]
+            bound.append(
+                BoundTool(
+                    llm_name=row.llm_name,
+                    installation_id=installation.id,
+                    connector=connector,
+                    ctx=ctx,
+                    spec=ToolSpec(
+                        name=row.name,
+                        description=row.description,
+                        input_schema=row.input_schema,
+                        risk=Risk(row.risk),
+                        capabilities=row.capabilities,
+                        idempotent=row.idempotent,
+                        timeout_s=row.timeout_s,
+                    ),
                 )
             )
 

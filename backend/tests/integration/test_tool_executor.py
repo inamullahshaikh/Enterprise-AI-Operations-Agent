@@ -11,6 +11,7 @@ the HTTP client + `AgentRunRepository`, the same way the agent runner itself wou
 pointing at a bare random UUID.
 """
 
+import asyncio
 import uuid
 from typing import Any, NamedTuple
 
@@ -108,7 +109,9 @@ async def run_ctx(
     return _RunCtx(workspace_id, user_id, conversation_id, run.id)
 
 
-def _bound(connector: Connector, run_ctx: _RunCtx, *, idempotent: bool) -> BoundTool:
+def _bound(
+    connector: Connector, run_ctx: _RunCtx, *, idempotent: bool, timeout_s: float = 30.0
+) -> BoundTool:
     return BoundTool(
         llm_name="fake__do_thing",
         installation_id=None,
@@ -130,6 +133,7 @@ def _bound(connector: Connector, run_ctx: _RunCtx, *, idempotent: bool) -> Bound
             },
             risk=Risk.READ,
             idempotent=idempotent,
+            timeout_s=timeout_s,
         ),
     )
 
@@ -277,3 +281,28 @@ async def test_a_connector_returned_failure_is_recorded_as_a_failed_tool_call(
     calls = await ToolCallRepository(db_session).list_for_run(run_ctx.workspace_id, run_ctx.run_id)
     assert calls[0].status == "failed"
     assert calls[0].error == "upstream rejected the request"
+
+
+async def test_a_tool_that_runs_past_its_timeout_becomes_a_tool_error(
+    db_session: AsyncSession, redis_client: Redis, run_ctx: _RunCtx
+) -> None:
+    class _SlowConnector(_ScriptedConnector):
+        async def call_tool(
+            self, ctx: ExecutionContext, tool_name: str, args: dict[str, Any]
+        ) -> ToolResult:
+            await asyncio.sleep(5)
+            return ToolResult(ok=True)
+
+    bound = _bound(_SlowConnector([]), run_ctx, idempotent=True, timeout_s=0.05)
+    executor = ToolExecutor(ToolCallRepository(db_session), EventPublisher(redis_client))
+
+    result = await executor.run(
+        workspace_id=run_ctx.workspace_id,
+        run_id=run_ctx.run_id,
+        plan_step_id="s1",
+        bound=bound,
+        args={"id": "x"},
+    )
+
+    assert result.ok is False
+    assert result.error == "Tool call failed: timed out after 0.05s"

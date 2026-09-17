@@ -10,6 +10,7 @@ that would crash the whole run (section 9.3: "Malformed function call ... return
 model as a function error so it can self-correct").
 """
 
+import asyncio
 import time
 import uuid
 from typing import Any
@@ -88,13 +89,18 @@ class ToolExecutor:
             else bound.ctx
         )
         started = time.monotonic()
+        # One ceiling over the whole call, retries included: a remote MCP or OpenAPI server that
+        # never answers must not hold the run open.
+        timeout = asyncio.timeout(bound.spec.timeout_s)
         try:
-            if bound.spec.idempotent:
-                result = await self._call_with_retry(bound, ctx, args)
-            else:
-                result = await bound.connector.call_tool(ctx, bound.spec.name, args)
+            async with timeout:
+                if bound.spec.idempotent:
+                    result = await self._call_with_retry(bound, ctx, args)
+                else:
+                    result = await bound.connector.call_tool(ctx, bound.spec.name, args)
         except Exception as exc:  # noqa: BLE001 - any connector failure becomes a tool error
-            result = ToolResult(ok=False, error=f"Tool call failed: {exc}")
+            reason = f"timed out after {bound.spec.timeout_s:g}s" if timeout.expired() else exc
+            result = ToolResult(ok=False, error=f"Tool call failed: {reason}")
         latency_ms = int((time.monotonic() - started) * 1000)
 
         await self.tool_calls.finish(

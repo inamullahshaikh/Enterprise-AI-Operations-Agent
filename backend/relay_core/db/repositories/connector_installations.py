@@ -7,8 +7,6 @@ from sqlalchemy import select
 from relay_core.db.models.connectors import ConnectorInstallation
 from relay_core.db.repositories.base import WorkspaceScopedRepository
 
-_ACTIVE_HEALTH = ("healthy", "degraded")
-
 
 class ConnectorInstallationRepository(WorkspaceScopedRepository[ConnectorInstallation]):
     model = ConnectorInstallation
@@ -48,29 +46,6 @@ class ConnectorInstallationRepository(WorkspaceScopedRepository[ConnectorInstall
             select(ConnectorInstallation)
             .where(ConnectorInstallation.workspace_id == workspace_id)
             .order_by(ConnectorInstallation.created_at)
-        )
-        return list((await self.session.execute(stmt)).scalars().all())
-
-    async def list_active_by_connector_keys(
-        self, workspace_id: uuid.UUID, connector_keys: set[str]
-    ) -> list[ConnectorInstallation]:
-        """Active, healthy-or-degraded installations whose connector type is one of
-        `connector_keys`, best priority first. Used by `relay_core.tools.registry.ToolRegistry`
-        to bind tools for a step's requested capabilities — `connector_keys` is the set of
-        connector types whose manifest declares any of them (docs/adr/0009: manifests, not a
-        `capability_bindings` table, are the source of truth for what a connector provides).
-        """
-        if not connector_keys:
-            return []
-        stmt = (
-            select(ConnectorInstallation)
-            .where(
-                ConnectorInstallation.workspace_id == workspace_id,
-                ConnectorInstallation.status == "active",
-                ConnectorInstallation.health.in_(_ACTIVE_HEALTH),
-                ConnectorInstallation.connector_key.in_(connector_keys),
-            )
-            .order_by(ConnectorInstallation.priority, ConnectorInstallation.created_at.desc())
         )
         return list((await self.session.execute(stmt)).scalars().all())
 

@@ -1,10 +1,11 @@
 """Coverage for `relay_core.capabilities.resolver.resolve_available_capabilities`
 (docs/system-design.md section 7.2), called by `load_context` but never tested directly.
-Exercises the rules docs/adr/0009 actually implements: `file.read` is always present, a
-connector only contributes its manifest's capabilities while `active`+`healthy`/`degraded`,
-and an attachment's inferred capabilities count even with zero connectors installed.
+`file.read` is always present, an installation only contributes its enabled `tool_definitions`
+rows' capabilities (custom ones included) while `active`+`healthy`/`degraded`, and an
+attachment's inferred capabilities count even with zero connectors installed.
 """
 
+import os
 import uuid
 
 import pytest
@@ -16,6 +17,9 @@ from relay_core.db.repositories.attachments import AttachmentRepository
 from relay_core.db.repositories.collections import CollectionRepository
 from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.db.repositories.documents import DocumentRepository
+from relay_core.db.repositories.tool_definitions import ToolDefinitionRepository
+from relay_core.security.crypto import LocalKMS
+from relay_core.tools.sync import sync_installation
 
 pytestmark = pytest.mark.asyncio
 
@@ -51,7 +55,7 @@ async def test_only_file_read_when_nothing_is_installed_or_attached(
         client, "resolver-empty@example.com"
     )
     available = await resolve_available_capabilities(
-        ConnectorInstallationRepository(db_session),
+        ToolDefinitionRepository(db_session),
         AttachmentRepository(db_session),
         DocumentRepository(db_session),
         workspace_id=workspace_id,
@@ -60,7 +64,7 @@ async def test_only_file_read_when_nothing_is_installed_or_attached(
     assert available == ["file.read"]
 
 
-async def test_a_healthy_active_postgres_installation_contributes_its_manifest_capabilities(
+async def test_a_healthy_active_postgres_installation_contributes_its_rows_capabilities(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     workspace_id, user_id, conversation_id = await _register_workspace_conversation_and_user(
@@ -76,10 +80,11 @@ async def test_a_healthy_active_postgres_installation_contributes_its_manifest_c
         priority=100,
         installed_by=user_id,
     )
+    await sync_installation(db_session, LocalKMS(os.urandom(32)), installation)
     await installations.set_health(workspace_id, installation.id, health="healthy", message="ok")
 
     available = await resolve_available_capabilities(
-        installations,
+        ToolDefinitionRepository(db_session),
         AttachmentRepository(db_session),
         DocumentRepository(db_session),
         workspace_id=workspace_id,
@@ -110,10 +115,11 @@ async def test_a_down_installation_is_excluded(
         priority=100,
         installed_by=user_id,
     )
+    await sync_installation(db_session, LocalKMS(os.urandom(32)), installation)
     await installations.set_health(workspace_id, installation.id, health="down", message="refused")
 
     available = await resolve_available_capabilities(
-        installations,
+        ToolDefinitionRepository(db_session),
         AttachmentRepository(db_session),
         DocumentRepository(db_session),
         workspace_id=workspace_id,
@@ -138,12 +144,13 @@ async def test_a_disabled_installation_is_excluded_even_if_healthy(
         priority=100,
         installed_by=user_id,
     )
+    await sync_installation(db_session, LocalKMS(os.urandom(32)), installation)
     await installations.set_health(
         workspace_id, installation.id, health="healthy", message="ok", status="disabled"
     )
 
     available = await resolve_available_capabilities(
-        installations,
+        ToolDefinitionRepository(db_session),
         AttachmentRepository(db_session),
         DocumentRepository(db_session),
         workspace_id=workspace_id,
@@ -168,10 +175,11 @@ async def test_a_degraded_installation_still_counts(
         priority=100,
         installed_by=user_id,
     )
+    await sync_installation(db_session, LocalKMS(os.urandom(32)), installation)
     await installations.set_health(workspace_id, installation.id, health="degraded", message="slow")
 
     available = await resolve_available_capabilities(
-        installations,
+        ToolDefinitionRepository(db_session),
         AttachmentRepository(db_session),
         DocumentRepository(db_session),
         workspace_id=workspace_id,
@@ -200,7 +208,7 @@ async def test_an_attachments_inferred_capabilities_count_with_zero_connectors(
     )
 
     available = await resolve_available_capabilities(
-        ConnectorInstallationRepository(db_session),
+        ToolDefinitionRepository(db_session),
         AttachmentRepository(db_session),
         DocumentRepository(db_session),
         workspace_id=workspace_id,
@@ -229,7 +237,7 @@ async def test_knowledge_search_only_appears_once_a_document_is_ready(
     )
 
     still_queued = await resolve_available_capabilities(
-        ConnectorInstallationRepository(db_session),
+        ToolDefinitionRepository(db_session),
         AttachmentRepository(db_session),
         documents,
         workspace_id=workspace_id,
@@ -240,10 +248,43 @@ async def test_knowledge_search_only_appears_once_a_document_is_ready(
     await documents.mark_ready(workspace_id, document.id, page_count=None, chunk_count=1)
 
     now_ready = await resolve_available_capabilities(
-        ConnectorInstallationRepository(db_session),
+        ToolDefinitionRepository(db_session),
         AttachmentRepository(db_session),
         documents,
         workspace_id=workspace_id,
         conversation_id=conversation_id,
     )
     assert "knowledge.search" in now_ready
+
+
+async def test_a_custom_capability_on_a_row_is_available(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    workspace_id, user_id, conversation_id = await _register_workspace_conversation_and_user(
+        client, "resolver-custom@example.com"
+    )
+    installations = ConnectorInstallationRepository(db_session)
+    installation = await installations.create(
+        workspace_id=workspace_id,
+        connector_key="postgres",
+        name="Sales DB",
+        slug="sales-db",
+        config={},
+        priority=100,
+        installed_by=user_id,
+    )
+    await sync_installation(db_session, LocalKMS(os.urandom(32)), installation)
+    await installations.set_health(workspace_id, installation.id, health="healthy", message="ok")
+    tools = ToolDefinitionRepository(db_session)
+    for row in await tools.list_for_installation(workspace_id, installation.id):
+        row.capabilities = ["custom.ticket.read"]
+    await db_session.flush()
+
+    available = await resolve_available_capabilities(
+        tools,
+        AttachmentRepository(db_session),
+        DocumentRepository(db_session),
+        workspace_id=workspace_id,
+        conversation_id=conversation_id,
+    )
+    assert available == ["custom.ticket.read", "file.read"]

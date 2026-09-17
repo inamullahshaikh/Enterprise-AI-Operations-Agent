@@ -28,13 +28,13 @@ from relay_core.config import Settings
 from relay_core.db.repositories.agent_runs import AgentRunRepository
 from relay_core.db.repositories.approvals import ApprovalRepository
 from relay_core.db.repositories.attachments import AttachmentRepository
-from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.db.repositories.conversations import ConversationRepository
 from relay_core.db.repositories.documents import DocumentRepository
 from relay_core.db.repositories.llm_calls import LLMCallRepository
 from relay_core.db.repositories.messages import MessageRepository
 from relay_core.db.repositories.policies import WorkspacePolicyRepository
 from relay_core.db.repositories.tool_calls import ToolCallRepository
+from relay_core.db.repositories.tool_definitions import ToolDefinitionRepository
 from relay_core.db.repositories.workspaces import WorkspaceMemberRepository
 from relay_core.events.publisher import EventPublisher
 from relay_core.events.types import RUN_FAILED, RUN_STARTED
@@ -74,7 +74,7 @@ def build_agent_deps(
         runs=AgentRunRepository(session),
         llm_calls=LLMCallRepository(session),
         tool_calls=tool_calls,
-        connector_installations=ConnectorInstallationRepository(session),
+        tool_definitions=ToolDefinitionRepository(session),
         attachments=AttachmentRepository(session),
         documents=DocumentRepository(session),
         tool_registry=tool_registry,

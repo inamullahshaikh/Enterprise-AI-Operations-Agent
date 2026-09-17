@@ -36,7 +36,7 @@ def _deps(events: _RecordingEvents, runs: _RecordingRuns) -> AgentDeps:
         runs=runs,  # type: ignore[arg-type]
         llm_calls=None,  # type: ignore[arg-type]
         tool_calls=None,  # type: ignore[arg-type]
-        connector_installations=None,  # type: ignore[arg-type]
+        tool_definitions=None,  # type: ignore[arg-type]
         attachments=None,  # type: ignore[arg-type]
         documents=None,  # type: ignore[arg-type]
         tool_registry=None,  # type: ignore[arg-type]

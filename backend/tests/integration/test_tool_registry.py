@@ -1,10 +1,11 @@
 """Coverage for `relay_core.tools.registry.ToolRegistry` (docs/system-design.md section 6.7),
 which `execute_step` relies on but nothing tests directly: binding `file_upload`/`documents`
-(always) plus installed connectors whose manifest provides a requested capability, namespacing
-tool names as `{slug}__{tool_name}` (section 6.6), decrypting credentials into the bound
-`ExecutionContext`, and excluding installations that aren't active+healthy. `postgres.list_tools`
-and `documents.list_tools` are both pure (no I/O), so this never needs a live database for
-binding — only `ToolExecutor`/a connector's own `call_tool` do.
+(always) plus installed connectors' enabled `tool_definitions` rows that provide a requested
+capability, only from the best-priority installation per capability, with the row's
+`{slug}__{tool_name}` name (section 6.6), decrypted credentials in the bound `ExecutionContext`,
+and nothing from installations that aren't active+healthy. Rows come from
+`relay_core.tools.sync.sync_installation`; `postgres.list_tools` is pure (no I/O), so syncing one
+needs no live database.
 """
 
 import os
@@ -16,14 +17,19 @@ from httpx import AsyncClient
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from relay_core.capabilities.resolver import resolve_available_capabilities
+from relay_core.db.repositories.attachments import AttachmentRepository
 from relay_core.db.repositories.connector_credentials import ConnectorCredentialRepository
 from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
+from relay_core.db.repositories.documents import DocumentRepository
 from relay_core.db.repositories.llm_calls import LLMCallRepository, ModelPricingRepository
+from relay_core.db.repositories.tool_definitions import ToolDefinitionRepository
 from relay_core.llm.gateway import LLMGateway
 from relay_core.llm.ratelimit import RedisRateLimiter
 from relay_core.security.credential_codec import encrypt_secrets
 from relay_core.security.crypto import LocalKMS
 from relay_core.tools.registry import ToolRegistry
+from relay_core.tools.sync import sync_installation
 
 pytestmark = pytest.mark.asyncio
 
@@ -144,6 +150,7 @@ async def test_a_healthy_postgres_installation_binds_its_namespaced_tools_with_d
         priority=100,
         installed_by=user_id,
     )
+    await sync_installation(db_session, LocalKMS(os.urandom(32)), installation)
     await installations.set_health(workspace_id, installation.id, health="healthy", message="ok")
     kms = LocalKMS(os.urandom(32))
     await ConnectorCredentialRepository(db_session).put(
@@ -191,6 +198,7 @@ async def test_an_unhealthy_installation_does_not_bind(
         priority=100,
         installed_by=user_id,
     )
+    await sync_installation(db_session, LocalKMS(os.urandom(32)), installation)
     await installations.set_health(workspace_id, installation.id, health="down", message="refused")
 
     tools = await _registry(db_session, redis_client, test_settings).tools_for_run(
@@ -224,3 +232,83 @@ async def test_documents_binds_for_knowledge_search_with_no_installations(
         "documents__get_document",
         "documents__list_collections",
     }
+
+
+async def _synced_postgres(
+    db_session: AsyncSession,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    slug: str,
+    priority: int = 100,
+) -> uuid.UUID:
+    installations = ConnectorInstallationRepository(db_session)
+    installation = await installations.create(
+        workspace_id=workspace_id,
+        connector_key="postgres",
+        name=slug,
+        slug=slug,
+        config={"host": "db", "port": 5432, "database": "sales"},
+        priority=priority,
+        installed_by=user_id,
+    )
+    await sync_installation(db_session, LocalKMS(os.urandom(32)), installation)
+    await installations.set_health(workspace_id, installation.id, health="healthy", message="ok")
+    return installation.id
+
+
+async def test_a_disabled_row_is_neither_bound_nor_available(
+    client: AsyncClient, db_session: AsyncSession, redis_client: Redis, test_settings
+) -> None:
+    workspace_id, user_id, conversation_id = await _register_workspace_and_user(
+        client, "registry-disabled-row@example.com"
+    )
+    installation_id = await _synced_postgres(db_session, workspace_id, user_id, "sales-db")
+    tools_repo = ToolDefinitionRepository(db_session)
+    for row in await tools_repo.list_for_installation(workspace_id, installation_id):
+        if row.name == "run_sql":
+            row.is_enabled = False
+            # A capability no other row provides, so hiding it from the resolver is observable.
+            row.capabilities = ["custom.sql.write"]
+    await db_session.flush()
+
+    tools = await _registry(db_session, redis_client, test_settings).tools_for_run(
+        workspace_id=workspace_id,
+        user_id=user_id,
+        run_id=uuid.uuid4(),
+        conversation_id=conversation_id,
+        capabilities=["sql.query", "custom.sql.write"],
+    )
+    assert {t.llm_name for t in tools} == {"sales-db__list_tables", "sales-db__describe_table"}
+
+    available = await resolve_available_capabilities(
+        tools_repo,
+        AttachmentRepository(db_session),
+        DocumentRepository(db_session),
+        workspace_id=workspace_id,
+        conversation_id=conversation_id,
+    )
+    assert "custom.sql.write" not in available
+
+
+async def test_only_the_best_priority_installation_binds_for_a_shared_capability(
+    client: AsyncClient, db_session: AsyncSession, redis_client: Redis, test_settings
+) -> None:
+    workspace_id, user_id, conversation_id = await _register_workspace_and_user(
+        client, "registry-priority@example.com"
+    )
+    await _synced_postgres(db_session, workspace_id, user_id, "backup-db", priority=100)
+    primary_id = await _synced_postgres(db_session, workspace_id, user_id, "main-db", priority=1)
+
+    tools = await _registry(db_session, redis_client, test_settings).tools_for_run(
+        workspace_id=workspace_id,
+        user_id=user_id,
+        run_id=uuid.uuid4(),
+        conversation_id=conversation_id,
+        capabilities=["sql.query"],
+    )
+    assert {t.llm_name for t in tools} == {
+        "main-db__list_tables",
+        "main-db__describe_table",
+        "main-db__run_sql",
+    }
+    assert {t.installation_id for t in tools} == {primary_id}

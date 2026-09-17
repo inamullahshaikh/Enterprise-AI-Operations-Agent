@@ -27,7 +27,7 @@ class LoadContext:
             before=state.trigger_message_id,
         )
         available_capabilities = await resolve_available_capabilities(
-            self.deps.connector_installations,
+            self.deps.tool_definitions,
             self.deps.attachments,
             self.deps.documents,
             workspace_id=state.workspace_id,
