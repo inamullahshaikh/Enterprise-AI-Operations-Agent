@@ -74,6 +74,18 @@ class ConnectorInstallationRepository(WorkspaceScopedRepository[ConnectorInstall
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
+    async def list_active_across_workspaces(self) -> list[ConnectorInstallation]:
+        """**Cross-tenant**, like `ApprovalRepository.list_expired_across_workspaces` and for the
+        same reason: the tool-sync sweep (`relay_worker.tasks.connectors`) is a system job with
+        no requesting user and no workspace to scope to. Each row carries its own
+        `workspace_id`, which the sync feeds back into the tenant-scoped methods."""
+        stmt = (
+            select(ConnectorInstallation)
+            .where(ConnectorInstallation.status == "active")
+            .order_by(ConnectorInstallation.created_at)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def set_health(
         self,
         workspace_id: uuid.UUID,

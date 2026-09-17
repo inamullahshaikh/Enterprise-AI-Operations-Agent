@@ -52,7 +52,7 @@ class ApprovalRepository(WorkspaceScopedRepository[Approval]):
     async def list_expired_across_workspaces(
         self, *, now: datetime, limit: int = 200
     ) -> list[Approval]:
-        """**The one cross-tenant query in this codebase**, and deliberately so: the expiry
+        """**A cross-tenant query** (the other is the tool-sync sweep's), deliberately: the expiry
         watchdog (`relay_worker.tasks.maintenance`) is a system sweep with no requesting user
         and no workspace to scope to, so the tenant filter every other method enforces has
         nothing to bind to here. The name says so loudly rather than hiding it behind an

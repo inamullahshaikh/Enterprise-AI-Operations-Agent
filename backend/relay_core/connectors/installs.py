@@ -1,7 +1,8 @@
 """Installs a built-in connector without the HTTP install route, for the two bootstraps that
 have no admin making the request: `relay_worker.tasks.maintenance.seed_demo` and the eval
 harness's per-profile workspaces (`evals/relay_eval`). Idempotent by slug, so re-running either
-leaves an existing installation alone.
+leaves an existing installation alone, except that one never synced gets its tool rows (the
+Phase 6 backfill for workspaces seeded before `tool_definitions` existed).
 
 Validation is deliberately skipped: both callers pass fixed, known-good config, whereas
 `relay_api.routers.connectors.install_connector` is where untrusted config gets checked against
@@ -13,12 +14,12 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from relay_core.connectors.base import ExecutionContext
 from relay_core.connectors.registry import CONNECTOR_TYPES
 from relay_core.db.repositories.connector_credentials import ConnectorCredentialRepository
 from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.security.credential_codec import encrypt_secrets
 from relay_core.security.crypto import LocalKMS
+from relay_core.tools.sync import installation_context, sync_installation
 
 
 async def ensure_installation(
@@ -34,7 +35,10 @@ async def ensure_installation(
     secrets: dict[str, str] | None = None,
 ) -> None:
     installations = ConnectorInstallationRepository(session)
-    if await installations.get_by_slug(workspace_id, slug) is not None:
+    existing = await installations.get_by_slug(workspace_id, slug)
+    if existing is not None:
+        if existing.last_synced_at is None:
+            await sync_installation(session, kms, existing)
         return
 
     installation = await installations.create(
@@ -54,15 +58,7 @@ async def ensure_installation(
         )
     await session.flush()
 
-    ctx = ExecutionContext(
-        workspace_id=workspace_id,
-        user_id=user_id,
-        run_id=installation.id,
-        conversation_id=installation.id,
-        installation_id=str(installation.id),
-        config=config,
-        secrets=secrets or {},
-    )
+    ctx = installation_context(workspace_id, user_id, installation, secrets or {})
     healthy, message = await CONNECTOR_TYPES[connector_key]().health_check(ctx)
     await installations.set_health(
         workspace_id,
@@ -71,3 +67,5 @@ async def ensure_installation(
         message=message,
         status="active" if healthy else "error",
     )
+    if healthy:
+        await sync_installation(session, kms, installation)

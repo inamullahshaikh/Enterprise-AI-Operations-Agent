@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate seed test lint eval fmt sandbox-image
+.PHONY: up down logs migrate seed sync-tools test lint eval fmt sandbox-image
 
 up: sandbox-image
 	docker compose up --build
@@ -20,6 +20,11 @@ migrate:
 
 seed:
 	docker compose exec api python -m relay_worker.tasks.maintenance seed_demo
+
+# Re-runs tool discovery for every active installation. An existing dev database needs this once
+# to backfill tool_definitions before the registry reads from it (Phase 6 A4).
+sync-tools:
+	docker compose exec api python -m relay_worker.tasks.connectors
 
 test:
 	docker compose exec api pytest tests/unit

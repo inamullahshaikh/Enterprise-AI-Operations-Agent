@@ -1,7 +1,8 @@
 """Connector installation routes (docs/system-design.md section 15.3), trimmed to what
 Phase 3 needs: browse the catalog, install/inspect/uninstall/health-check a built-in
-connector. Tool listing/enable-disable, OpenAPI/MCP endpoints, and capability-priority editing
-are Phase 6 (docs/adr/0009). `file_upload` never appears here — it's always available rather
+connector, plus Phase 6's tool discovery sync (`relay_core.tools.sync`). Tool
+listing/enable-disable, OpenAPI/MCP endpoints, and capability-priority editing are later Phase 6
+tickets (docs/adr/0009). `file_upload` never appears here — it's always available rather
 than admin-installed (relay_core.capabilities.resolver / relay_core.tools.registry docstrings).
 """
 
@@ -16,7 +17,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay_api.deps import CurrentUser, get_kms, require_workspace_role
-from relay_core.connectors.base import ExecutionContext
 from relay_core.connectors.manifest import ConnectorManifest, load_manifests
 from relay_core.connectors.registry import CONNECTOR_TYPES
 from relay_core.db.models.connectors import ConnectorInstallation
@@ -26,6 +26,7 @@ from relay_core.db.session import get_session
 from relay_core.security.credential_codec import decrypt_secrets, encrypt_secrets
 from relay_core.security.crypto import LocalKMS
 from relay_core.security.rbac import Role
+from relay_core.tools.sync import SyncReport, installation_context, sync_installation
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/connectors", tags=["connectors"])
 catalog_router = APIRouter(prefix="/connectors", tags=["connectors"])
@@ -40,26 +41,6 @@ def _slugify(name: str) -> str:
     ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
     slug = _SLUG_RE.sub("-", ascii_name.lower()).strip("-")
     return slug or "connector"
-
-
-def _install_time_context(
-    workspace_id: uuid.UUID,
-    user_id: uuid.UUID,
-    installation: ConnectorInstallation,
-    secrets: dict[str, str],
-) -> ExecutionContext:
-    # There's no real run/conversation at install time (on_install/health_check happen outside
-    # any agent run) — the installation's own id fills those two required fields since neither
-    # built-in connector ever reads them.
-    return ExecutionContext(
-        workspace_id=workspace_id,
-        user_id=user_id,
-        run_id=installation.id,
-        conversation_id=installation.id,
-        installation_id=str(installation.id),
-        config=installation.config,
-        secrets=secrets,
-    )
 
 
 class ManifestOut(BaseModel):
@@ -204,7 +185,7 @@ async def install_connector(
     await session.flush()
 
     connector = CONNECTOR_TYPES[body.connector_key]()
-    ctx = _install_time_context(workspace_id, current.user.id, installation, body.secrets)
+    ctx = installation_context(workspace_id, current.user.id, installation, body.secrets)
     try:
         await connector.on_install(ctx)
         healthy, message = await connector.health_check(ctx)
@@ -217,6 +198,8 @@ async def install_connector(
         message=message,
         status="active" if healthy else "error",
     )
+    if healthy:
+        await sync_installation(session, kms, installation)
 
     return InstallationOut.from_model(installation)
 
@@ -242,7 +225,7 @@ async def uninstall_connector(
     installation = await _owned_installation(session, workspace_id, installation_id)
     connector_cls = CONNECTOR_TYPES.get(installation.connector_key)
     if connector_cls is not None:
-        ctx = _install_time_context(workspace_id, current.user.id, installation, {})
+        ctx = installation_context(workspace_id, current.user.id, installation, {})
         await connector_cls().on_uninstall(ctx)
     await ConnectorInstallationRepository(session).delete(workspace_id, installation_id)
 
@@ -267,7 +250,7 @@ async def test_connector(
     if credential is not None:
         secrets = decrypt_secrets(kms, credential)
 
-    ctx = _install_time_context(workspace_id, current.user.id, installation, secrets)
+    ctx = installation_context(workspace_id, current.user.id, installation, secrets)
     try:
         healthy, message = await connector_cls().health_check(ctx)
     except Exception as exc:  # noqa: BLE001 - a failed test must record why, not 500
@@ -280,4 +263,18 @@ async def test_connector(
         message=message,
         status="active" if healthy else "error",
     )
+    if healthy:
+        await sync_installation(session, kms, installation)
     return InstallationOut.from_model(installation)
+
+
+@router.post("/{installation_id}/sync", response_model=SyncReport)
+async def sync_connector_tools(
+    workspace_id: uuid.UUID = Path(...),
+    installation_id: uuid.UUID = Path(...),
+    current: CurrentUser = Depends(require_workspace_role(Role.admin.name)),
+    session: AsyncSession = Depends(get_session),
+    kms: LocalKMS = Depends(get_kms),
+) -> SyncReport:
+    installation = await _owned_installation(session, workspace_id, installation_id)
+    return await sync_installation(session, kms, installation)

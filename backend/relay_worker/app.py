@@ -30,7 +30,12 @@ app.conf.beat_schedule = {
     },
 }
 
-from relay_worker.tasks import agent, ingest, maintenance  # noqa: E402, F401 -- registers tasks
+from relay_worker.tasks import (  # noqa: E402, F401 -- registers tasks
+    agent,
+    connectors,
+    ingest,
+    maintenance,
+)
 
 # Later phases add their task modules here, e.g.:
-# from relay_worker.tasks import memory, connectors, evals
+# from relay_worker.tasks import memory, evals
