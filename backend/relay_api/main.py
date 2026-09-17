@@ -9,6 +9,7 @@ from relay_api.routers import (
     conversations,
     debug,
     documents,
+    memories,
     oauth,
     runs,
     tools,
@@ -32,6 +33,7 @@ app.include_router(connectors.catalog_router, prefix="/api/v1")
 app.include_router(oauth.router, prefix="/api/v1")
 app.include_router(oauth.callback_router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
+app.include_router(memories.router, prefix="/api/v1")
 app.include_router(approvals.router, prefix="/api/v1")
 app.include_router(tools.router, prefix="/api/v1")
 # debug.router gates itself out in prod (see its `require_non_prod` dependency)

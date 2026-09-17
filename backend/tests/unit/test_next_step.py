@@ -44,6 +44,8 @@ def _deps(events: _RecordingEvents, runs: _RecordingRuns) -> AgentDeps:
         approvals=None,  # type: ignore[arg-type]
         policies=None,  # type: ignore[arg-type]
         members=None,  # type: ignore[arg-type]
+        memories=None,  # type: ignore[arg-type]
+        extract_memories=None,  # type: ignore[arg-type]
     )
 
 

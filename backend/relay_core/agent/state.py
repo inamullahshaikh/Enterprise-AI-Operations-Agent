@@ -65,6 +65,10 @@ class AgentState(BaseModel):
     user_message: str
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
     history_summary: str | None = None
+    # What the agent remembers about this user and workspace (section 12.3), already rendered
+    # to strings by `load_context`. Rows would be a compatibility surface on a checkpointed
+    # state for no benefit — nothing downstream needs a memory's id, only its text.
+    memories: list[str] = Field(default_factory=list)
     available_capabilities: list[str] = Field(default_factory=list)
     # The triggering user's workspace role, snapshotted by `load_context`. Feeds section 13.1's
     # approval rules, where a `never` rule only waives approval for owners and admins. Held in

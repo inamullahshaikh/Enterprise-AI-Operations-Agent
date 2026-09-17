@@ -14,6 +14,7 @@ the failure this check exists to catch.
 
 from typing import Any
 
+from relay_core.agent.context import remembered_context
 from relay_core.agent.deps import AgentDeps
 from relay_core.agent.state import AgentState
 from relay_core.llm.profiles import EXECUTOR
@@ -49,7 +50,7 @@ class Synthesize:
             for step in plan.steps
         )
         contents = [{"role": "user", "parts": [{"text": "\n".join(lines)}]}]
-        system = _SYSTEM_PROMPT
+        system = _SYSTEM_PROMPT + remembered_context(state)
         if state.unsupported_claims:
             system += _REVISION_PROMPT.format(
                 claims="\n".join(f"- {claim}" for claim in state.unsupported_claims)

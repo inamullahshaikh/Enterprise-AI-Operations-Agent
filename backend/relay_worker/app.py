@@ -49,7 +49,8 @@ from relay_worker.tasks import (  # noqa: E402, F401 -- registers tasks
     connectors,
     ingest,
     maintenance,
+    memory,
 )
 
 # Later phases add their task modules here, e.g.:
-# from relay_worker.tasks import memory, evals
+# from relay_worker.tasks import evals

@@ -63,6 +63,8 @@ def _deps(gateway: FakeGateway) -> AgentDeps:
         approvals=None,  # type: ignore[arg-type]
         policies=None,  # type: ignore[arg-type]
         members=None,  # type: ignore[arg-type]
+        memories=None,  # type: ignore[arg-type]
+        extract_memories=None,  # type: ignore[arg-type]
     )
 
 

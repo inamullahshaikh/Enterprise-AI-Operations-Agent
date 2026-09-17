@@ -5,6 +5,11 @@ depend on (or read) a developer's local `.env` — every field the tests need is
 supplied explicitly here, including a throwaway JWT keypair and a throwaway
 `LOCAL_MASTER_KEY` generated fresh per test (rather than fixed hardcoded secrets,
 which gitleaks would flag).
+
+`gemini_rpm_limit` is raised well above the production default. The limiter's window is keyed
+by model and minute in one shared Redis database, so every test in a run competes for the same
+60-request budget — a suite that grows past it starts failing tests that have nothing to do with
+rate limiting. The limiter itself is exercised directly in `tests/unit`, not by accident here.
 """
 
 import base64
@@ -42,5 +47,6 @@ def test_settings(tmp_path) -> Settings:
         jwt_public_key_path=str(public_key_path),
         access_token_ttl_min=15,
         refresh_token_ttl_days=14,
+        gemini_rpm_limit=100_000,
         local_master_key="base64:" + base64.b64encode(os.urandom(32)).decode(),
     )

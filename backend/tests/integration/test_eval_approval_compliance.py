@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from relay_core.agent.nodes.guard_input import GuardVerdict
 from relay_core.agent.nodes.route import RouteVerdict
+from relay_core.agent.nodes.validate_final import FinalVerdict
 from relay_core.agent.nodes.validate_step import StepVerdict
 from relay_core.agent.state import Plan, PlanStep
 from relay_core.config import Settings
@@ -72,6 +73,9 @@ def _script() -> list[Any]:
         ),
         _text_response("Drafted the email."),
         _text_response(StepVerdict(status="pass", reason="Draft exists.").model_dump_json()),
+        # `synthesize` streams its draft, then `validate_final` (Phase 7 C2) checks it against
+        # the step results before anything reaches the user.
+        _text_response(FinalVerdict(status="pass", reason="Grounded.").model_dump_json()),
     ]
 
 

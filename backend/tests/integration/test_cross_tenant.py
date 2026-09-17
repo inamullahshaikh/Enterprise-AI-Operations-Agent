@@ -198,3 +198,46 @@ async def test_tool_and_capability_routes_are_tenant_scoped(
         headers=other,
     )
     assert resp.status_code == 404
+
+
+async def test_memory_routes_are_tenant_scoped(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A memory is the most personal thing Relay stores, so both halves of the boundary are
+    checked: workspace B's owner can neither read A's memories nor reach one by id through
+    their own workspace's path."""
+    from relay_core.db.repositories.memories import MemoryRepository
+
+    owner_token = await _register_and_get_token(client, "mem-tenant-a@example.com")
+    ws_a = (
+        await client.post("/api/v1/workspaces", json={"name": "A"}, headers=_auth(owner_token))
+    ).json()["id"]
+    me = (await client.get("/api/v1/auth/me", headers=_auth(owner_token))).json()["id"]
+    memory = await MemoryRepository(db_session).create(
+        workspace_id=uuid.UUID(ws_a),
+        user_id=uuid.UUID(me),
+        scope="user",
+        kind="preference",
+        content="Prefers formal drafts",
+        confidence=0.9,
+        embedding=[1.0] + [0.0] * 767,
+        embedding_model="gemini-embedding-001",
+    )
+    await db_session.flush()
+
+    other_token = await _register_and_get_token(client, "mem-tenant-b@example.com")
+    ws_b = (
+        await client.post("/api/v1/workspaces", json={"name": "B"}, headers=_auth(other_token))
+    ).json()["id"]
+    other = _auth(other_token)
+
+    theirs = await client.get(f"/api/v1/workspaces/{ws_a}/memories", headers=other)
+    assert theirs.status_code == 404
+    mine = await client.get(f"/api/v1/workspaces/{ws_b}/memories", headers=other)
+    assert mine.json() == []
+
+    for workspace_id in (ws_a, ws_b):
+        path = f"/api/v1/workspaces/{workspace_id}/memories/{memory.id}"
+        patched = await client.patch(path, json={"is_active": False}, headers=other)
+        assert patched.status_code == 404
+        assert (await client.delete(path, headers=other)).status_code == 404

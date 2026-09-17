@@ -43,19 +43,38 @@ def text_response(text: str) -> types.GenerateContentResponse:
 class ScriptedModels:
     """`responses` answers `generate_content` in order; `stream_texts` answers
     `generate_content_stream` in order, each one emitted as two chunks so a test can tell a
-    buffered draft from a single published blob."""
+    buffered draft from a single published blob.
+
+    `systems` and `contents` record the system instruction and the user turns of every call,
+    streamed or not. That is what the Phase 7 memory tests assert on: a memory or a summary that
+    never reaches a prompt has changed nothing, however faithfully it was retrieved."""
 
     def __init__(self, responses: list[types.GenerateContentResponse], stream_texts: list[str]):
         self.responses = list(responses)
         self.stream_texts = list(stream_texts)
         self.calls: list[str] = []
+        self.systems: list[str] = []
+        self.contents: list[object] = []
 
     async def generate_content(self, *, model, contents, config):
         self.calls.append("generate")
+        self.systems.append(config.system_instruction or "")
+        self.contents.append(contents)
         return self.responses.pop(0)
+
+    async def embed_content(self, *, model, contents, config):
+        """`load_context` embeds every user message to retrieve memories, so a scripted client
+        that could not embed would make the retrieval failure path the one every flow test
+        takes. The vectors are a fixed non-answer: a test that cares which memory comes back
+        replaces `gateway.embed` outright."""
+        return types.EmbedContentResponse(
+            embeddings=[types.ContentEmbedding(values=[0.0] * 768) for _ in contents]
+        )
 
     async def generate_content_stream(self, *, model, contents, config):
         self.calls.append("stream")
+        self.systems.append(config.system_instruction or "")
+        self.contents.append(contents)
         text = self.stream_texts.pop(0)
         head, tail = text[: len(text) // 2], text[len(text) // 2 :]
 
@@ -96,9 +115,15 @@ def scripted_gateway(
     )
 
 
-def install_dispatcher(*, db_session, redis_client, test_settings, gateway) -> Callable[[], None]:
+def install_dispatcher(
+    *, db_session, redis_client, test_settings, gateway, extract_memories=None
+) -> Callable[[], None]:
     """Returns the teardown, so a test can `try: ... finally: teardown()` like the Phase 3
-    flow tests do."""
+    flow tests do.
+
+    `extract_memories` replaces the post-run memory enqueue. The real one hangs off the session's
+    `after_commit`, which never fires here (every test transaction is rolled back), so a test
+    that wants to prove `finalize` asks for extraction has to pass its own."""
     checkpointer = MemorySaver()
 
     async def _dispatch(workspace_id: uuid.UUID, run_id: uuid.UUID) -> None:
@@ -110,6 +135,7 @@ def install_dispatcher(*, db_session, redis_client, test_settings, gateway) -> C
             settings=test_settings,
             checkpointer=checkpointer,
             gateway=gateway,
+            extract_memories=extract_memories,
         )
 
     app.dependency_overrides[get_run_dispatcher] = lambda: _dispatch

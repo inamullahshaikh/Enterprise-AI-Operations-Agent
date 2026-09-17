@@ -8,6 +8,7 @@ into an honest gap for the user, not the planner itself.
 
 from typing import Any
 
+from relay_core.agent.context import remembered_context
 from relay_core.agent.deps import AgentDeps
 from relay_core.agent.state import AgentState, Plan
 from relay_core.capabilities.taxonomy import render_catalog
@@ -51,7 +52,7 @@ class PlanNode:
             capability_catalog=catalog,
             available_capabilities=", ".join(state.available_capabilities) or "(none)",
             max_steps=_MAX_STEPS,
-        )
+        ) + remembered_context(state)
         resp = await self.deps.gateway.generate(
             role=PLANNER,
             system=system,

@@ -31,6 +31,7 @@ from typing import Any
 
 from google.genai import types
 
+from relay_core.agent.context import remembered_context
 from relay_core.agent.deps import AgentDeps
 from relay_core.agent.scratchpad import dump_contents, load_contents
 from relay_core.agent.state import AgentState, Budget, PlanStep, update_step
@@ -128,7 +129,7 @@ class ExecuteStep:
 
             resp = await self.deps.gateway.generate(
                 role=EXECUTOR,
-                system=_SYSTEM_PROMPT,
+                system=_SYSTEM_PROMPT + remembered_context(state),
                 contents=contents,
                 tools=tools.to_gemini_declarations(),
                 workspace_id=state.workspace_id,

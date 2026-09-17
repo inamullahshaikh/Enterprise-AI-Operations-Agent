@@ -19,9 +19,11 @@ from typing import Any
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 from redis.asyncio import Redis
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
-from relay_core.agent.deps import AgentDeps
+from relay_core.agent.deps import AgentDeps, MemoryDispatcher
 from relay_core.agent.graph import compile_graph
 from relay_core.agent.state import AgentState
 from relay_core.config import Settings
@@ -31,6 +33,7 @@ from relay_core.db.repositories.attachments import AttachmentRepository
 from relay_core.db.repositories.conversations import ConversationRepository
 from relay_core.db.repositories.documents import DocumentRepository
 from relay_core.db.repositories.llm_calls import LLMCallRepository
+from relay_core.db.repositories.memories import MemoryRepository
 from relay_core.db.repositories.messages import MessageRepository
 from relay_core.db.repositories.policies import WorkspacePolicyRepository
 from relay_core.db.repositories.tool_calls import ToolCallRepository
@@ -47,6 +50,32 @@ from relay_core.tools.registry import ToolRegistry
 logger = logging.getLogger(__name__)
 
 
+def after_commit_dispatcher(session: AsyncSession) -> MemoryDispatcher:
+    """Enqueues `relay_worker.tasks.memory.extract_memories` once the run's own transaction has
+    committed (docs/system-design.md section 12.2).
+
+    The wait matters: `finalize` runs *inside* that transaction, so a task enqueued there could
+    be picked up by another worker before the `agent_runs` row says `completed` — and extraction
+    refuses to run on anything that isn't. SQLAlchemy's `after_commit` event is the hook that
+    already exists for this; nothing here needs an outbox table.
+
+    A failure to enqueue is logged and swallowed. The run has already succeeded by then, and the
+    cost of a missing enqueue is one missing memory.
+    """
+
+    async def _dispatch(workspace_id: uuid.UUID, run_id: uuid.UUID) -> None:
+        @event.listens_for(session.sync_session, "after_commit", once=True)
+        def _enqueue(_session: Session) -> None:
+            try:
+                from relay_worker.tasks.memory import run_extract_memories
+
+                run_extract_memories.delay(str(workspace_id), str(run_id))
+            except Exception:  # noqa: BLE001 - the answer is already the user's
+                logger.exception("could not enqueue memory extraction for run %s", run_id)
+
+    return _dispatch
+
+
 def build_agent_deps(
     session: AsyncSession,
     redis: Redis,
@@ -54,6 +83,7 @@ def build_agent_deps(
     *,
     gateway: LLMGateway | None = None,
     object_store: ObjectStore | None = None,
+    extract_memories: MemoryDispatcher | None = None,
 ) -> AgentDeps:
     """Shared by the first run of a turn and by every later resume of it, so a run that comes
     back from `awaiting_approval` is rebuilt with exactly the same wiring it was suspended
@@ -82,6 +112,8 @@ def build_agent_deps(
         approvals=ApprovalRepository(session),
         policies=WorkspacePolicyRepository(session),
         members=WorkspaceMemberRepository(session),
+        memories=MemoryRepository(session),
+        extract_memories=extract_memories or after_commit_dispatcher(session),
     )
 
 
@@ -95,8 +127,16 @@ async def run_agent_once(
     checkpointer: BaseCheckpointSaver[Any],
     gateway: LLMGateway | None = None,
     object_store: ObjectStore | None = None,
+    extract_memories: MemoryDispatcher | None = None,
 ) -> None:
-    deps = build_agent_deps(session, redis, settings, gateway=gateway, object_store=object_store)
+    deps = build_agent_deps(
+        session,
+        redis,
+        settings,
+        gateway=gateway,
+        object_store=object_store,
+        extract_memories=extract_memories,
+    )
     runs = deps.runs
     messages = deps.messages
     events = deps.events
@@ -157,6 +197,7 @@ async def resume_agent_once(
     checkpointer: BaseCheckpointSaver[Any],
     gateway: LLMGateway | None = None,
     object_store: ObjectStore | None = None,
+    extract_memories: MemoryDispatcher | None = None,
 ) -> None:
     """Restarts a run parked at `approval_gate`'s `interrupt()` (docs/system-design.md section
     13.2). `Command(resume=...)` re-enters that node with `decision` as the return value of the
@@ -171,7 +212,14 @@ async def resume_agent_once(
     decide` refuses to overwrite a decision, and this refuses to resume a run that isn't parked,
     so neither a retried Celery task nor a double-submitted decision replays an approved write.
     """
-    deps = build_agent_deps(session, redis, settings, gateway=gateway, object_store=object_store)
+    deps = build_agent_deps(
+        session,
+        redis,
+        settings,
+        gateway=gateway,
+        object_store=object_store,
+        extract_memories=extract_memories,
+    )
     run = await deps.runs.get(workspace_id, run_id)
     if run is None:
         logger.error(

@@ -5,6 +5,7 @@ UI can render them incrementally.
 
 from typing import Any
 
+from relay_core.agent.context import remembered_context
 from relay_core.agent.deps import AgentDeps
 from relay_core.agent.state import AgentState
 from relay_core.events.types import TOKEN
@@ -30,7 +31,7 @@ class DirectAnswer:
 
         resp = await self.deps.gateway.generate_stream(
             role=EXECUTOR,
-            system=_SYSTEM_PROMPT,
+            system=_SYSTEM_PROMPT + remembered_context(state),
             contents=contents,
             workspace_id=state.workspace_id,
             run_id=state.run_id,

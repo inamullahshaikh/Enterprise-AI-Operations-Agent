@@ -28,6 +28,24 @@ class ConversationRepository(WorkspaceScopedRepository[Conversation]):
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
+    async def set_summary(
+        self,
+        workspace_id: uuid.UUID,
+        id_: uuid.UUID,
+        *,
+        summary: str,
+        upto_message_id: uuid.UUID,
+    ) -> None:
+        """Stores a rolling summary and the watermark it covers (docs/system-design.md section
+        12.1). The two always move together — a summary without its watermark would be
+        re-summarized from the beginning on the next pass."""
+        conversation = await self.get(workspace_id, id_)
+        if conversation is None:
+            return
+        conversation.summary = summary
+        conversation.summary_upto_message_id = upto_message_id
+        await self.session.flush()
+
     async def touch(
         self, workspace_id: uuid.UUID, id_: uuid.UUID, *, title: str | None = None
     ) -> None:
