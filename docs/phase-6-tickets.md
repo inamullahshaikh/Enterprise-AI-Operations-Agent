@@ -115,10 +115,10 @@ These choices shape every ticket. E1 records them in an ADR.
     - `embedding vector(768)` (nullable), `embedding_model`
     - timestamps
     - `UNIQUE (installation_id, name)`, `UNIQUE (workspace_id, llm_name)`
-    - partial index `ix_tools_ws_enabled ON (workspace_id) WHERE is_enabled`
+    - index `ix_tool_definitions_workspace_id` (from the `WorkspaceScoped` mixin; the partial `WHERE is_enabled` variant was dropped as redundant)
   - `connector_installations.last_synced_at timestamptz`.
 - Model in `relay_core/db/models/tools.py`. Export it from `db/models/__init__.py` so Alembic autogenerate sees it.
-- `ToolDefinitionRepository(WorkspaceScopedRepository)` with the methods A3 and A4 need, and nothing more.
+- `ToolDefinitionRepository(WorkspaceScopedRepository)`: `list_for_installation`, `add`, `delete` (what A3 needs). A4 adds its own bind query.
 
 **Tests:** migration up and down in the integration container. `tests/integration/test_cross_tenant.py` covers the new repository.
 

@@ -1,8 +1,8 @@
 """Connector installations & credentials (docs/system-design.md section 14.3), trimmed per
 docs/adr/0009-phase3-connector-metadata-in-code.md: no `connector_definitions` FK (the
 manifest registry in `relay_core.connectors.manifest` is the catalog), no `capability_bindings`
-table (`priority` lives directly on the installation), no `allowed_roles`/`openapi_spec_key`/
-`last_synced_at` (OAuth, OpenAPI, and MCP discovery are Phase 6/7 additions).
+table (`priority` lives directly on the installation), no `allowed_roles`/`openapi_spec_key`.
+`last_synced_at` arrives in Phase 6 with tool discovery (`relay_core.db.models.tools`).
 
 `file_upload` never gets a row here — see `relay_core.capabilities.resolver` and
 `relay_core.tools.registry` for why it's always available instead of admin-installed.
@@ -45,6 +45,7 @@ class ConnectorInstallation(Base, WorkspaceScoped, TimestampMixin):
     )
     health_message: Mapped[str | None] = mapped_column(Text)
     last_health_at: Mapped[datetime | None]
+    last_synced_at: Mapped[datetime | None]
     priority: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, default=100, server_default="100"
     )

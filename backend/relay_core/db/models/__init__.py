@@ -11,6 +11,7 @@ from relay_core.db.models.llm import LLMCall, ModelPricing
 from relay_core.db.models.policies import WorkspacePolicy
 from relay_core.db.models.runs import AgentRun
 from relay_core.db.models.tool_calls import ToolCall
+from relay_core.db.models.tools import ToolDefinition
 
 __all__ = [
     "AgentRun",
@@ -27,6 +28,7 @@ __all__ = [
     "ModelPricing",
     "RefreshToken",
     "ToolCall",
+    "ToolDefinition",
     "User",
     "Workspace",
     "WorkspaceMember",
