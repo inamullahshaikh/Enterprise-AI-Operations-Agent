@@ -33,6 +33,7 @@ from relay_api.main import app
 from relay_core.agent.nodes.execute_step import build_function_response_content
 from relay_core.agent.nodes.guard_input import GuardVerdict
 from relay_core.agent.nodes.route import RouteVerdict
+from relay_core.agent.nodes.validate_final import FinalVerdict
 from relay_core.agent.nodes.validate_step import StepVerdict
 from relay_core.agent.runner import resume_agent_once, run_agent_once
 from relay_core.agent.state import Plan, PlanStep
@@ -264,6 +265,10 @@ def _script() -> list[types.GenerateContentResponse]:
         # Consumed after the resume, when `execute_step` re-enters with the decision folded in.
         _text_response("Handled the renewal reminder."),
         _text_response(StepVerdict(status="pass", reason="Step resolved.").model_dump_json()),
+        # `validate_final` (Phase 7 C2) checks the synthesized answer before it ships.
+        _text_response(
+            FinalVerdict(status="pass", reason="Grounded in the results.").model_dump_json()
+        ),
     ]
 
 

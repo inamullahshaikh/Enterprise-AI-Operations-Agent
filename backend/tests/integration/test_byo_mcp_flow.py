@@ -26,6 +26,7 @@ from relay_api.deps import get_genai_client, get_resume_dispatcher, get_run_disp
 from relay_api.main import app
 from relay_core.agent.nodes.guard_input import GuardVerdict
 from relay_core.agent.nodes.route import RouteVerdict
+from relay_core.agent.nodes.validate_final import FinalVerdict
 from relay_core.agent.nodes.validate_step import StepVerdict
 from relay_core.agent.runner import resume_agent_once, run_agent_once
 from relay_core.agent.state import Plan, PlanStep
@@ -123,6 +124,8 @@ async def test_an_unseen_mcp_server_is_plannable_and_callable_with_no_code_chang
     allow = GuardVerdict(verdict="allow", reason="").model_dump_json()
     task = RouteVerdict(route="task").model_dump_json()
     passed = StepVerdict(status="pass", reason="ok").model_dump_json()
+    # `validate_final` (Phase 7 C2) checks each synthesized answer before it ships.
+    grounded = FinalVerdict(status="pass", reason="Grounded in the step results.").model_dump_json()
     models = _ScriptedModels(
         [
             _text(json.dumps(tagger)),
@@ -133,6 +136,7 @@ async def test_an_unseen_mcp_server_is_plannable_and_callable_with_no_code_chang
             _call("ticketing__search_tickets", {"account_name": "Acme", "priority": "P1"}),
             _text("Acme has two open P1 tickets."),
             _text(passed),
+            _text(grounded),
             # Turn 2: a write, which stops for approval.
             _text(allow),
             _text(task),
@@ -148,6 +152,7 @@ async def test_an_unseen_mcp_server_is_plannable_and_callable_with_no_code_chang
             ),
             _text("Opened the ticket."),
             _text(passed),
+            _text(grounded),
         ]
     )
     scripted = _ScriptedClient(models)

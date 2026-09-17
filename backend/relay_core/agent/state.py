@@ -94,6 +94,21 @@ class AgentState(BaseModel):
     # write calls need a human, cleared once the decision has been folded into the scratchpad.
     pending_approval_id: uuid.UUID | None = None
 
+    # replanning (relay_core.agent.nodes.replan). `replan_reason` is both the validator's
+    # explanation and the routing signal: `validate_step` sets it when a revision is worth
+    # asking for, the graph's edge reads it, and `replan` clears it. `replans_used` is what
+    # stops a run rediscovering the same dead end forever.
+    replan_reason: str | None = None
+    replans_used: int = 0
+
+    # final groundedness check (relay_core.agent.nodes.validate_final). `draft_chunks` holds the
+    # streamed pieces of a draft that has not been validated yet — they are published only once
+    # the draft is the one that will be finalized, so the user never watches text appear and
+    # then change (ADR-0013 decision 5).
+    draft_chunks: list[str] = Field(default_factory=list)
+    unsupported_claims: list[str] = Field(default_factory=list)
+    final_revisions: int = 0
+
     # output
     final_answer: str | None = None
     error: str | None = None

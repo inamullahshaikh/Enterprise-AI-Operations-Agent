@@ -1,8 +1,11 @@
 """`validate_step` (docs/system-design.md sections 8.5, 8.8): checks whether the step that just
-ran actually met its `expected_output`. There's no `replan` node yet (Phase 7), so a verdict of
-`"replan"` is treated the same as `"fail"` — the step is marked `failed` with the validator's
-reason instead of looping forever or crashing the run. `next_step`'s cascading skip then
-honestly skips whatever depended on it, and `synthesize` explains the gap in the final answer.
+ran actually met its `expected_output`.
+
+A verdict of `"replan"` is the single entry to `relay_core.agent.nodes.replan` (ADR-0013
+decision 4): the step is still marked `failed`, and `replan_reason` is what tells the graph to
+revise the plan rather than carry the failure forward. Past `Replan.MAX_REPLANS` the verdict
+degrades to `"fail"` — `next_step`'s cascading skip then honestly skips whatever depended on
+the step, and `synthesize` explains the gap in the final answer.
 
 Retries reset the step back to `pending` rather than routing straight to `execute_step`: the
 conditional edge in `relay_core.agent.graph` reads the step's status off the state
@@ -15,6 +18,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from relay_core.agent.deps import AgentDeps
+from relay_core.agent.nodes.replan import MAX_REPLANS
 from relay_core.agent.state import AgentState, update_step
 from relay_core.llm.profiles import VALIDATOR
 from relay_core.llm.schemas import parse_structured
@@ -30,8 +34,9 @@ What happened: {result_summary}
 
 Judge only from "What happened" above — don't assume anything the step didn't report. Return
 "pass" if it satisfies "Done means". Return "retry" if this looks like a fixable, transient
-problem (e.g. a tool error worth trying again). Return "fail" if it's fundamentally blocked
-(missing data, contradictory results, nothing retrying would fix).
+problem (e.g. a tool error worth trying again). Return "replan" if this step cannot work as
+written but the objective could still be reached another way. Return "fail" if it's
+fundamentally blocked (missing data, contradictory results, nothing any plan would fix).
 
 Return JSON matching the schema. `reason` should be one sentence a user could read.
 """
@@ -81,4 +86,11 @@ class ValidateStep:
             return {"plan": update_step(plan, step.id, status="pending")}
 
         reason = verdict.reason if verdict is not None else "Could not validate this step's result."
-        return {"plan": update_step(plan, step.id, status="failed", result_summary=reason)}
+        failed = {"plan": update_step(plan, step.id, status="failed", result_summary=reason)}
+        if (
+            verdict is not None
+            and verdict.status == "replan"
+            and state.replans_used < MAX_REPLANS
+        ):
+            return failed | {"replan_reason": reason}
+        return failed

@@ -4,6 +4,7 @@ far. Artifact and usage events are Phase 6+, once there's something that produce
 
 RUN_STARTED = "run.started"
 PLAN_CREATED = "plan.created"
+PLAN_UPDATED = "plan.updated"
 CAPABILITIES_MISSING = "capabilities.missing"
 QUESTION_ASKED = "question.asked"
 TOKEN = "token"
