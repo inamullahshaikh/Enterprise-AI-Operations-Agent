@@ -1,9 +1,9 @@
 """Per-connector-profile workspace provisioning for the eval harness (docs/system-design.md
 section 21.2), trimmed to the profiles the connectors built so far can actually produce:
 `db_only` (postgres against the demo DB), `csv_only` (a fixture CSV attached, no connectors),
-`docs_only` (fixture Markdown files ingested into the knowledge base), and `none` (nothing).
-`full`/`crm_only` wait for connectors that would give them distinct meaning
-(Gmail/Calendar/HubSpot — Phase 5+).
+`docs_only` (fixture Markdown files ingested into the knowledge base), `full` (postgres, mock
+gmail/google_calendar/web_search, and the sample MCP ticketing server), and `none` (nothing).
+`crm_only` waits for a CRM connector.
 
 Each profile gets its own fixed, idempotently-created workspace (`eval-<profile>`) reused
 across harness runs, mirroring `relay_worker.tasks.maintenance.seed_demo`'s pattern — cases
@@ -78,7 +78,7 @@ async def ensure_workspace_for_profile(
     if profile in ("db_only", "full"):
         await _ensure_postgres_installation(session, settings, kms, user_id, workspace.id)
     if profile == "full":
-        await _ensure_mock_installations(session, settings, kms, user_id, workspace.id)
+        await _ensure_mock_installations(session, settings, kms, redis, user_id, workspace.id)
     elif profile == "docs_only":
         await _ensure_documents_ingested(session, settings, redis, user_id, workspace.id)
 
@@ -119,19 +119,30 @@ async def _ensure_mock_installations(
     session: AsyncSession,
     settings: Settings,
     kms: LocalKMS,
+    redis: Redis,
     user_id: uuid.UUID,
     workspace_id: uuid.UUID,
 ) -> None:
-    for connector_key in ("gmail", "google_calendar"):
+    # The MCP server's tools arrive untagged, so installing it needs the real tagger: that the
+    # agent can then plan against what the tagger assigned is part of what `full` evaluates.
+    gateway = build_llm_gateway(session, redis, settings)
+    installs = [
+        (key, f"Eval {key} (mock)", {"base_url": settings.mock_services_url})
+        for key in ("gmail", "google_calendar", "web_search")
+    ]
+    installs.append(("mcp", "Eval ticketing (MCP)", {"url": settings.mcp_ticketing_url}))
+    for connector_key, name, config in installs:
         await ensure_installation(
             session,
             kms,
             workspace_id=workspace_id,
             user_id=user_id,
             connector_key=connector_key,
-            name=f"Eval {connector_key} (mock)",
+            name=name,
             slug=f"eval-{connector_key.replace('_', '-')}",
-            config={"base_url": settings.mock_services_url},
+            config=config,
+            gateway=gateway,
+            settings=settings,
         )
 
 

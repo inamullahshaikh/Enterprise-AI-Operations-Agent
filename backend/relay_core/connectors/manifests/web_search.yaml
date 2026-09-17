@@ -1,0 +1,28 @@
+# docs/system-design.md section 10.5. Tavily-shaped search; the mock service answers in dev/evals.
+key: web_search
+display_name: Web search
+category: web
+description: Search the public web and fetch pages as text.
+auth_type: api_key
+config_schema:
+  type: object
+  required: [base_url]
+  properties:
+    base_url:
+      type: string
+      description: Search API base URL (Tavily-compatible). Use the mock service in dev/eval runs.
+      default: http://mock-services:8100
+    max_results:
+      type: integer
+      minimum: 1
+      maximum: 10
+      default: 5
+secrets_schema:
+  type: object
+  properties:
+    api_key:
+      type: string
+      description: Search API key. Left empty when pointed at the mock service.
+provides_capabilities:
+  - web.search
+  - web.fetch

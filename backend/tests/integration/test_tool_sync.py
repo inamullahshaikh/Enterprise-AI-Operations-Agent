@@ -12,6 +12,7 @@ from httpx import AsyncClient
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from relay_core.capabilities.tagger import _TagBatch, _ToolTag
 from relay_core.connectors.base import (
     AuthType,
     Connector,
@@ -28,6 +29,7 @@ from relay_core.db.repositories.users import UserRepository
 from relay_core.db.repositories.workspaces import WorkspaceRepository
 from relay_core.security.crypto import LocalKMS
 from relay_core.tools.sync import sync_installation
+from tests.unit.test_agent_nodes import FakeGateway
 
 pytestmark = pytest.mark.asyncio
 
@@ -198,3 +200,62 @@ async def test_a_failing_list_tools_keeps_rows_and_marks_the_installation_down(
         installation.workspace_id, installation.id
     )
     assert [r.name for r in rows] == ["lookup"]
+
+
+async def test_a_changed_built_in_tool_updates_silently(
+    db_session: AsyncSession, fake_connector: type[_FakeConnector]
+) -> None:
+    installation = await _fake_installation(db_session)
+    kms = LocalKMS(os.urandom(32))
+    fake_connector.specs = [_spec("lookup", ["sql.query"])]
+    await sync_installation(db_session, kms, installation)
+
+    changed = _spec("lookup", ["sql.query"])
+    changed.description = "Now does something else."
+    fake_connector.specs = [changed]
+    report = await sync_installation(db_session, kms, installation)
+
+    assert report.updated == ["lookup"] and report.needs_review == []
+    [row] = await ToolDefinitionRepository(db_session).list_for_installation(
+        installation.workspace_id, installation.id
+    )
+    assert row.is_enabled and not row.needs_review
+    assert row.description == "Now does something else."
+
+
+async def test_new_tools_are_tagged_but_admin_capabilities_are_never_retagged(
+    db_session: AsyncSession, fake_connector: type[_FakeConnector], test_settings
+) -> None:
+    installation = await _fake_installation(db_session)
+    kms = LocalKMS(os.urandom(32))
+    fake_connector.specs = [_spec("tickets")]
+    tag = _ToolTag(
+        name="tickets",
+        capabilities=["custom.ticket.read"],
+        suggested_risk="write",
+        confidence=0.9,
+    )
+    gateway = FakeGateway(parsed=_TagBatch(tools=[tag]))
+
+    report = await sync_installation(
+        db_session, kms, installation, gateway=gateway, settings=test_settings
+    )
+    tools = ToolDefinitionRepository(db_session)
+    [row] = await tools.list_for_installation(installation.workspace_id, installation.id)
+    assert report.needs_review == []
+    assert (row.capabilities, row.capability_source, row.risk) == (
+        ["custom.ticket.read"],
+        "tagged",
+        "write",
+    )
+
+    row.capabilities, row.capability_source = ["custom.support.read"], "admin"
+    await db_session.flush()
+    changed = _spec("tickets")
+    changed.description = "Changed upstream."
+    fake_connector.specs = [changed]
+    await sync_installation(db_session, kms, installation, gateway=gateway, settings=test_settings)
+
+    assert len(gateway.calls) == 1
+    [row] = await tools.list_for_installation(installation.workspace_id, installation.id)
+    assert (row.capabilities, row.capability_source) == (["custom.support.read"], "admin")

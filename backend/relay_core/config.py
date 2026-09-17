@@ -69,13 +69,14 @@ class Settings(BaseSettings):
     # Connectors
     sandbox_url: str = "http://sandbox:8080"
     sandbox_timeout_s: float = 30.0
-    web_search_provider: str = "tavily"
-    web_search_api_key: str | None = None
     use_mock_connectors: bool = True
     # Where `mocks/main.py` answers for gmail/google_calendar (section 21.2). Read by
     # `seed_demo` and the eval harness when they install those connectors; an installation
     # stores its own `base_url`, so nothing in the request path reads this.
     mock_services_url: str = "http://mock-services:8100"
+    # The sample MCP server (mcp_examples/ticketing). Only the eval harness installs it; the demo
+    # plugs it in live through the API instead (section 27.2 step 7).
+    mcp_ticketing_url: str = "http://mcp-ticketing:8200/mcp"
     # Exact hostnames `relay_core.security.ssrf` lets through to private addresses — the dev
     # stack's own services. Set as a JSON list, e.g. ["mock-services","mcp-ticketing"].
     ssrf_allowed_hosts: list[str] = []

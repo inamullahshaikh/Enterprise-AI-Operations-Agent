@@ -1,0 +1,42 @@
+# docs/system-design.md section 6.5. `operations` is what POST /connectors/openapi/preview returns,
+# narrowed to the ones the admin picked. Declares no capabilities: each operation is tagged.
+key: openapi
+display_name: OpenAPI
+category: generic
+description: Turn selected operations from an OpenAPI 3 spec into tools against your own API.
+auth_type: api_key
+config_schema:
+  type: object
+  required: [base_url, operations]
+  properties:
+    base_url:
+      type: string
+      description: "Where requests go, e.g. https://api.example.com/v1"
+    auth:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [none, bearer, api_key_header, basic]
+          default: none
+        header_name:
+          type: string
+          description: Header that carries the API key, for api_key_header auth.
+    operations:
+      type: array
+      maxItems: 50
+      items:
+        type: object
+        required: [name, method, path, input_schema]
+        properties:
+          name: {type: string}
+          method: {type: string, enum: [get, head, post, put, patch, delete]}
+          path: {type: string}
+secrets_schema:
+  type: object
+  properties:
+    token: {type: string}
+    api_key: {type: string}
+    username: {type: string}
+    password: {type: string}
+provides_capabilities: []

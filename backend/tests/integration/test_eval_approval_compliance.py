@@ -33,13 +33,15 @@ from relay_core.llm.gateway import LLMGateway
 from relay_core.llm.ratelimit import RedisRateLimiter
 from relay_core.security.crypto import build_kms
 from relay_core.storage.object_store import build_object_store
+from tests.integration.conftest import UnavailableGenaiClient
 from tests.integration.test_approval_flow import (
     _function_call_response,
     _ScriptedClient,
     _text_response,
 )
 
-pytestmark = pytest.mark.asyncio
+# The `full` profile installs web_search and mcp against local test servers.
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("ssrf_allows_localhost")]
 
 
 def _script() -> list[Any]:
@@ -108,6 +110,16 @@ async def _run(
         )
 
     monkeypatch.setattr("relay_core.agent.runner.build_llm_gateway", _gateway)
+    # Installing the MCP server tags its tools; with no Gemini here they simply stay untagged.
+    monkeypatch.setattr(
+        "relay_eval.workspace_setup.build_llm_gateway",
+        lambda session, redis, settings_: LLMGateway(
+            UnavailableGenaiClient(),  # type: ignore[arg-type]
+            limiter=RedisRateLimiter(redis, rpm_limit=settings_.gemini_rpm_limit),
+            llm_calls=LLMCallRepository(session),
+            pricing=ModelPricingRepository(session),
+        ),
+    )
     case = EvalCase(
         key=f"compliance_{decision}",
         suite="approval_compliance",
@@ -140,11 +152,15 @@ async def _run(
 
 @pytest.fixture
 def eval_settings(
-    test_settings: Settings, migrated_db_url: str, mock_services_url: str
+    test_settings: Settings, migrated_db_url: str, mock_services_url: str, mcp_ticketing
 ) -> Settings:
     # The `full` profile also installs postgres; the test database stands in for the demo one.
     return test_settings.model_copy(
-        update={"demo_db_url": migrated_db_url, "mock_services_url": mock_services_url}
+        update={
+            "demo_db_url": migrated_db_url,
+            "mock_services_url": mock_services_url,
+            "mcp_ticketing_url": f"{mcp_ticketing[0]}/mcp",
+        }
     )
 
 

@@ -1,0 +1,8 @@
+key: tool_selection_web_search_basic
+suite: tool_selection
+connector_profile: full
+message: "Search the web for recent news about Acme Robotics funding."
+expectations:
+  route: task
+  must_call_tools: ["*__search_web"]
+tags: [tool_selection, web]

@@ -16,6 +16,9 @@ def test_catalog_contains_every_builtin() -> None:
         "python_sandbox",
         "gmail",
         "google_calendar",
+        "mcp",
+        "openapi",
+        "web_search",
     }
 
 

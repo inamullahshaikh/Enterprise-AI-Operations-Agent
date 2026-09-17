@@ -14,9 +14,11 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from relay_core.config import Settings
 from relay_core.connectors.registry import CONNECTOR_TYPES
 from relay_core.db.repositories.connector_credentials import ConnectorCredentialRepository
 from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
+from relay_core.llm.gateway import LLMGateway
 from relay_core.security.credential_codec import encrypt_secrets
 from relay_core.security.crypto import LocalKMS
 from relay_core.tools.sync import installation_context, sync_installation
@@ -33,12 +35,16 @@ async def ensure_installation(
     slug: str,
     config: dict[str, Any],
     secrets: dict[str, str] | None = None,
+    gateway: LLMGateway | None = None,
+    settings: Settings | None = None,
 ) -> None:
+    """`gateway` lets discovered tools be tagged and embedded; without one they're synced
+    untagged."""
     installations = ConnectorInstallationRepository(session)
     existing = await installations.get_by_slug(workspace_id, slug)
     if existing is not None:
         if existing.last_synced_at is None:
-            await sync_installation(session, kms, existing)
+            await sync_installation(session, kms, existing, gateway=gateway, settings=settings)
         return
 
     installation = await installations.create(
@@ -68,4 +74,4 @@ async def ensure_installation(
         status="active" if healthy else "error",
     )
     if healthy:
-        await sync_installation(session, kms, installation)
+        await sync_installation(session, kms, installation, gateway=gateway, settings=settings)

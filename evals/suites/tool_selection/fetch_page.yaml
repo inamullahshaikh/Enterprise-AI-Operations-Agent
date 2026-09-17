@@ -1,0 +1,8 @@
+key: tool_selection_fetch_page
+suite: tool_selection
+connector_profile: full
+message: "Read {mock_services_url}/pages/globex-layoffs and tell me what it says about Globex."
+expectations:
+  route: task
+  must_call_tools: ["*__fetch_url"]
+tags: [tool_selection, web]

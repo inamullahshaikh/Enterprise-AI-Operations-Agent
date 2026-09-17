@@ -28,6 +28,13 @@ app.conf.beat_schedule = {
         "task": "relay_worker.tasks.maintenance.expire_stale_approvals",
         "schedule": 300.0,
     },
+    # Keeps MCP tool lists fresh and catches a changed tool (section 18.1's rug-pull) within six
+    # hours, without anyone pressing "sync". A health check runs first, so an installation that
+    # went down and came back is picked up again too.
+    "sync-connector-tools": {
+        "task": "relay_worker.tasks.connectors.sync_all_installations",
+        "schedule": 6 * 3600.0,
+    },
 }
 
 from relay_worker.tasks import (  # noqa: E402, F401 -- registers tasks

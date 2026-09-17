@@ -48,7 +48,7 @@ services:
 
   worker:
     build: { context: ., dockerfile: backend/Dockerfile }
-    command: celery -A relay_worker.app worker -Q agent,agent_resume,ingest,memory,eval,maintenance -c 4
+    command: celery -A relay_worker.app worker -Q agent,agent_resume,ingest,memory,connectors,eval,maintenance -c 4
     env_file: .env
     depends_on:
       postgres: { condition: service_healthy }
@@ -80,6 +80,10 @@ services:
   mock-services: # fake HubSpot/Gmail/Calendar/Search for dev & evals
     build: ./mocks
     ports: ["8100:8100"]
+
+  mcp-ticketing: # sample MCP server for the bring-your-own-tools demo (mcp_examples/)
+    build: ./mcp_examples/ticketing
+    ports: ["8200:8200"]
 
   web:
     build: ./frontend

@@ -45,6 +45,21 @@ CI on any write that runs without approval, and `task_success` runs the end-to-e
 scenario. `make seed` installs both mock-backed connectors in the demo workspace. See
 [docs/adr/0011-approvals-interrupt-resume-and-enforcement-in-code.md](docs/adr/0011-approvals-interrupt-resume-and-enforcement-in-code.md).
 
+**Phase 6** (bring your own tools): plug in any remote MCP server, or pick operations from an
+OpenAPI 3 spec, and the agent can plan with and call those tools with no code changes. Every
+installed connector's tools now live in a `tool_definitions` table, so admins can enable or
+disable a tool, override its risk and assign capabilities through `/tools`. An LLM tagger
+proposes capabilities for discovered tools, with code enforcing the rules; the most important is
+that it can only raise risk. `/capabilities` shows which installation serves each capability,
+and installation priority picks the winner. A changed MCP tool is disabled until someone reviews
+it, and discovery re-runs every six hours. Every user-supplied URL goes through an SSRF guard
+that pins each connection to the address it checked. Tool retrieval by embedding keeps large
+workspaces to 20 tools per call. There is also a `web_search` connector (Tavily-shaped, with
+guarded `fetch_url`) and a sample MCP ticketing server in `mcp_examples/`. See
+[docs/adr/0012-tool-definitions-and-byo-tools.md](docs/adr/0012-tool-definitions-and-byo-tools.md)
+and [docs/phase-6-status.md](docs/phase-6-status.md). An existing dev database needs
+`make sync-tools` once after upgrading.
+
 Phase numbers here follow the design doc. The commit history runs one behind: the commit titled
 "Phase 3 completed" holds both Phase 3 and Phase 4.
 

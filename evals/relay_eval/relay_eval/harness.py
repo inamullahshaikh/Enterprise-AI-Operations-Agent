@@ -9,9 +9,12 @@ resume reads back exactly the checkpoint the run parked on.
 way a human would answer it: the harness calls the real decision route function
 (`relay_api.routers.approvals.decide_approval`, so its RBAC/expiry/partial-batch logic is what
 runs) according to the case's `approval_decision`, then resumes the run, and repeats until the
-run stops asking. The `full` profile's gmail/google_calendar installations point at the mock
-service (section 21.2), which is reset before each such case so its write counts belong to that
-case alone.
+run stops asking. The `full` profile's gmail/google_calendar/web_search installations point at
+the mock service (section 21.2) and its `mcp` installation at the sample ticketing server. Both
+are reset before each such case, so their write counts belong to that case alone.
+
+A case message may contain `{mock_services_url}`, for a page URL that differs between Docker and
+CI.
 """
 
 import time
@@ -139,7 +142,7 @@ async def run_case(
             workspace_id=workspace_id,
             conversation_id=conversation_id,
             role="user",
-            content=case.message,
+            content=case.message.replace("{mock_services_url}", settings.mock_services_url),
         )
         run = await AgentRunRepository(session).create(
             workspace_id=workspace_id,
@@ -152,9 +155,10 @@ async def run_case(
     uses_mocks = case.connector_profile == "full"
     baseline = 0
     if uses_mocks:
-        async with httpx.AsyncClient(base_url=settings.mock_services_url, timeout=10) as http:
-            (await http.post("/_reset")).raise_for_status()
-        baseline = await _mock_write_count(settings.mock_services_url)
+        for base_url in (settings.mock_services_url, _ticketing_base(settings)):
+            async with httpx.AsyncClient(base_url=base_url, timeout=10) as http:
+                (await http.post("/_reset")).raise_for_status()
+        baseline = await _mock_write_count(settings)
 
     started = time.monotonic()
     async with sessionmaker() as session:
@@ -180,7 +184,7 @@ async def run_case(
     latency_s = time.monotonic() - started
 
     side_effects = (
-        await _mock_write_count(settings.mock_services_url) - baseline if uses_mocks else None
+        await _mock_write_count(settings) - baseline if uses_mocks else None
     )
 
     async with sessionmaker() as session:
@@ -284,13 +288,20 @@ def _scripted_decision(
     return DecisionRequest(action="approve"), ids
 
 
-async def _mock_write_count(base_url: str) -> int:
-    """Drafts + sent messages + calendar events currently held by the mock service."""
+async def _mock_write_count(settings: Settings) -> int:
+    """Drafts + sent messages + calendar events held by the mock service, plus tickets created
+    and comments added on the ticketing server."""
     # ponytail: primary calendar only; list each calendar_id once cases write to others
-    async with httpx.AsyncClient(base_url=base_url, timeout=10) as http:
+    async with httpx.AsyncClient(base_url=settings.mock_services_url, timeout=10) as http:
         responses = [
             await http.get(path) for path in ("/gmail/drafts", "/gmail/sent", "/calendar/events")
         ]
-    for resp in responses:
+    async with httpx.AsyncClient(base_url=_ticketing_base(settings), timeout=10) as http:
+        stats = await http.get("/_stats")
+    for resp in (*responses, stats):
         resp.raise_for_status()
-    return sum(len(resp.json()) for resp in responses)
+    return sum(len(resp.json()) for resp in responses) + sum(stats.json().values())
+
+
+def _ticketing_base(settings: Settings) -> str:
+    return settings.mcp_ticketing_url.removesuffix("/mcp")

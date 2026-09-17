@@ -25,18 +25,23 @@ async def resolve_available_capabilities(
     workspace_id: uuid.UUID,
     conversation_id: uuid.UUID,
 ) -> list[str]:
-    available: set[str] = {"file.read"}
+    available = set(await always_available(documents_repo, workspace_id))
     for row, _ in await tools_repo.list_bindable(workspace_id):
         available.update(row.capabilities)
 
     attachments = await attachments_repo.list_for_conversation(workspace_id, conversation_id)
     for attachment in attachments:
         available.update(attachment.inferred_capabilities)
-
-    # `documents` is always-available like `file_upload` (no installation row, section 10.2/
-    # 10.8) but only contributes `knowledge.search` once something has actually finished
-    # ingesting — an empty knowledge base shouldn't make the planner think it can search one.
-    if await documents_repo.has_any_ready(workspace_id):
-        available.add("knowledge.search")
-
     return sorted(available)
+
+
+async def always_available(
+    documents_repo: DocumentRepository, workspace_id: uuid.UUID
+) -> dict[str, str]:
+    """Capability -> the always-available connector providing it, with no installation row.
+    `documents` (section 10.2/10.8) only counts once something has actually finished ingesting:
+    an empty knowledge base shouldn't make the planner think it can search one."""
+    sources = {"file.read": "file_upload"}
+    if await documents_repo.has_any_ready(workspace_id):
+        sources["knowledge.search"] = "documents"
+    return sources

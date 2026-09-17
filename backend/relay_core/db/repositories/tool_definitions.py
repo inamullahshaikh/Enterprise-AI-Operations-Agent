@@ -1,12 +1,12 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 
 from relay_core.db.models.connectors import ConnectorInstallation
 from relay_core.db.models.tools import ToolDefinition
 from relay_core.db.repositories.base import WorkspaceScopedRepository
 
-_HEALTHY_ENOUGH = ("healthy", "degraded")
+HEALTHY_ENOUGH = ("healthy", "degraded")
 
 
 class ToolDefinitionRepository(WorkspaceScopedRepository[ToolDefinition]):
@@ -25,6 +25,34 @@ class ToolDefinitionRepository(WorkspaceScopedRepository[ToolDefinition]):
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
+    async def list_for_workspace(
+        self,
+        workspace_id: uuid.UUID,
+        *,
+        capability: str | None = None,
+        risk: str | None = None,
+        needs_review: bool | None = None,
+        installation_id: uuid.UUID | None = None,
+    ) -> list[ToolDefinition]:
+        stmt = select(ToolDefinition).where(ToolDefinition.workspace_id == workspace_id)
+        if capability is not None:
+            stmt = stmt.where(ToolDefinition.capabilities.contains([capability]))
+        if risk is not None:
+            stmt = stmt.where(ToolDefinition.risk == risk)
+        if needs_review is not None:
+            stmt = stmt.where(ToolDefinition.needs_review.is_(needs_review))
+        if installation_id is not None:
+            stmt = stmt.where(ToolDefinition.installation_id == installation_id)
+        stmt = stmt.order_by(ToolDefinition.llm_name)
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def list_enabled(
+        self, workspace_id: uuid.UUID
+    ) -> list[tuple[ToolDefinition, ConnectorInstallation]]:
+        """Every enabled row with its installation, whatever the installation's health, in
+        priority order. The capabilities map shows unhealthy providers too, to explain a gap."""
+        return await self._pairs(self._enabled(workspace_id))
+
     async def list_bindable(
         self, workspace_id: uuid.UUID, capabilities: set[str] | None = None
     ) -> list[tuple[ToolDefinition, ConnectorInstallation]]:
@@ -32,23 +60,47 @@ class ToolDefinitionRepository(WorkspaceScopedRepository[ToolDefinition]):
         installation, best priority first and newest installation first on a tie (section 7.2
         rule 2). `capabilities` narrows it to rows providing at least one of them; without it
         this is every capability source the resolver counts."""
-        stmt = (
-            select(ToolDefinition, ConnectorInstallation)
-            .join(ConnectorInstallation, ToolDefinition.installation_id == ConnectorInstallation.id)
-            .where(
-                ToolDefinition.workspace_id == workspace_id,
-                ToolDefinition.is_enabled.is_(True),
-                ConnectorInstallation.status == "active",
-                ConnectorInstallation.health.in_(_HEALTHY_ENOUGH),
-            )
-            .order_by(
-                ConnectorInstallation.priority,
-                ConnectorInstallation.created_at.desc(),
-                ToolDefinition.name,
-            )
+        stmt = self._enabled(workspace_id).where(
+            ConnectorInstallation.status == "active",
+            ConnectorInstallation.health.in_(HEALTHY_ENOUGH),
         )
         if capabilities is not None:
             stmt = stmt.where(ToolDefinition.capabilities.overlap(sorted(capabilities)))
+        return await self._pairs(stmt)
+
+    async def nearest_ids(
+        self, workspace_id: uuid.UUID, ids: list[uuid.UUID], vector: list[float], limit: int
+    ) -> list[uuid.UUID]:
+        """The `limit` rows among `ids` closest to `vector`. A row not embedded yet sorts last
+        rather than being dropped, so it still binds whenever there's room."""
+        stmt = (
+            select(ToolDefinition.id)
+            .where(ToolDefinition.workspace_id == workspace_id, ToolDefinition.id.in_(ids))
+            .order_by(ToolDefinition.embedding.cosine_distance(vector).nulls_last())
+            .limit(limit)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    def _enabled(
+        self, workspace_id: uuid.UUID
+    ) -> Select[tuple[ToolDefinition, ConnectorInstallation]]:
+        return (
+            select(ToolDefinition, ConnectorInstallation)
+            .join(ConnectorInstallation, ToolDefinition.installation_id == ConnectorInstallation.id)
+            .where(ToolDefinition.workspace_id == workspace_id, ToolDefinition.is_enabled.is_(True))
+            .order_by(
+                ConnectorInstallation.priority,
+                ConnectorInstallation.created_at.desc(),
+                # uuid7 ids are time-ordered: breaks a `created_at` tie (same transaction) the
+                # same way, newest first.
+                ConnectorInstallation.id.desc(),
+                ToolDefinition.name,
+            )
+        )
+
+    async def _pairs(
+        self, stmt: Select[tuple[ToolDefinition, ConnectorInstallation]]
+    ) -> list[tuple[ToolDefinition, ConnectorInstallation]]:
         return [(row, installation) for row, installation in await self.session.execute(stmt)]
 
     async def add(self, tool: ToolDefinition) -> ToolDefinition:

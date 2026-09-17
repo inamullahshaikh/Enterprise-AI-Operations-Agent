@@ -57,7 +57,7 @@ async def test_catalog_lists_installable_connectors_but_not_always_available_one
     resp = await client.get("/api/v1/connectors/catalog")
     assert resp.status_code == 200
     keys = {m["key"] for m in resp.json()}
-    assert keys == {"postgres", "gmail", "google_calendar"}
+    assert keys == {"postgres", "gmail", "google_calendar", "mcp", "openapi", "web_search"}
 
 
 async def test_admin_can_install_and_the_health_check_runs_for_real(
@@ -251,3 +251,18 @@ async def test_the_test_endpoint_reports_a_broken_connection(
     )
     assert retest_resp.status_code == 200
     assert retest_resp.json()["health"] == "healthy"
+
+
+async def test_install_applies_the_manifests_config_defaults(client: AsyncClient) -> None:
+    """gmail's manifest defaults `base_url`; an admin who omits it gets the default, not a
+    validation error for a required field."""
+    owner_headers = await _register(client, "router-defaults@example.com")
+    workspace_id = await _workspace(client, owner_headers, "Defaults Co")
+
+    resp = await client.post(
+        f"/api/v1/workspaces/{workspace_id}/connectors",
+        json={"connector_key": "gmail", "name": "Mail", "config": {}},
+        headers=owner_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["config"] == {"base_url": "http://mock-services:8100"}

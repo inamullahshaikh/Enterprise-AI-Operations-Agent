@@ -1,9 +1,9 @@
 # Relay eval harness
 
 Ten suites are planned (routing, planning, capability_detection, tool_selection, text_to_sql,
-rag, task_success, approval_compliance, injection, config_matrix). Six exist so far:
-`routing`, `capability_detection`, `text_to_sql` and `rag` (Phases 3–4), plus
-`approval_compliance` and `task_success` (Phase 5). See docs/system-design.md section 21 for the
+rag, task_success, approval_compliance, injection, config_matrix). Seven exist so far:
+`routing`, `capability_detection`, `text_to_sql` and `rag` (Phases 3–4),
+`approval_compliance` and `task_success` (Phase 5), and `tool_selection` (Phase 6). See docs/system-design.md section 21 for the
 full design and docs/adr/0009-phase3-connector-metadata-in-code.md for what v0 deliberately
 trims: no `eval_*` DB tables (a JSON report under `reports/` instead), no LLM-as-judge scoring
 (deterministic checks only — the `rag` suite's "recall@k/faithfulness/citation accuracy" row
@@ -31,7 +31,13 @@ Needs a real `GEMINI_API_KEY` and a reachable Postgres/Redis (the same ones the 
 this runs through the real graph and repositories, not a scripted fake client. The `full`
 profile (postgres + mock gmail/google_calendar) also needs the mock service at
 `MOCK_SERVICES_URL` (`docker compose up mock-services`, then `MOCK_SERVICES_URL=http://localhost:8100`).
-The harness resets that service before each `full` case, wiping any demo drafts in it.
+The `full` profile also installs `web_search` against the mock service and an `mcp` connector
+against the sample ticketing server at `MCP_TICKETING_URL` (`docker compose up mcp-ticketing`,
+then `MCP_TICKETING_URL=http://localhost:8200/mcp`). Installing it runs the real capability
+tagger. Outside Docker, both services are on `localhost`, so also set
+`SSRF_ALLOWED_HOSTS='["localhost"]'`. The harness resets both services before each `full` case,
+wiping any demo drafts or tickets in them. A case message can say `{mock_services_url}` for a page
+on the mock service.
 
 ```bash
 relay-eval run --suite text_to_sql
@@ -46,6 +52,8 @@ every run is a single sequential pass over each suite's cases.
 - `suites/<suite>/*.yaml` — eval cases (see section 21.3 for the format; the subset built so
   far is in `relay_eval.cases.EvalCase`)
 - `suites/approval_compliance/`, `suites/task_success/` — write cases on the `full` profile
+- `suites/tool_selection/` — the agent picks discovered tools: MCP `search_tickets`, web
+  `search_web` and `fetch_url` (gate 0.9)
 - `fixtures/` — CSV fixtures for the `csv_only` connector profile and Markdown fixtures for
   `docs_only` (ingested into that profile's eval workspace once, idempotently, by
   `relay_eval.workspace_setup._ensure_documents_ingested` — same two documents as

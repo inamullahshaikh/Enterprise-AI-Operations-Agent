@@ -10,6 +10,7 @@ isn't running, since `postgres_url`/`redis_url` fail to start their containers.
 import asyncio
 import importlib.util
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -71,11 +72,24 @@ async def db_session(migrated_db_url: str) -> AsyncIterator[AsyncSession]:
     await engine.dispose()
 
 
+class _UnavailableModels:
+    async def generate_content(self, **_: object) -> object:
+        raise RuntimeError("Gemini is not available in integration tests")
+
+    async def embed_content(self, **_: object) -> object:
+        raise RuntimeError("Gemini is not available in integration tests")
+
+
+class UnavailableGenaiClient:
+    def __init__(self) -> None:
+        self.aio = type("_Aio", (), {"models": _UnavailableModels()})()
+
+
 @pytest_asyncio.fixture
 async def client(
     db_session: AsyncSession, test_settings: Settings, redis_url: str
 ) -> AsyncIterator[AsyncClient]:
-    from relay_api.deps import get_redis, get_settings_dep
+    from relay_api.deps import get_genai_client, get_redis, get_settings_dep
     from relay_api.main import app
     from relay_core.db.session import get_session
 
@@ -86,6 +100,10 @@ async def client(
     app.dependency_overrides[get_session] = _session_override
     app.dependency_overrides[get_settings_dep] = lambda: test_settings
     app.dependency_overrides[get_redis] = lambda: redis_client
+    # Installing a connector tags and embeds its tools through the gateway. No test reaches real
+    # Gemini: this client fails every call, which sync treats as "untagged, unembedded". A test
+    # that scripts Gemini overrides this dependency itself.
+    app.dependency_overrides[get_genai_client] = lambda: UnavailableGenaiClient()
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -95,25 +113,26 @@ async def client(
         await redis_client.aclose()
 
 
-# `mocks/` is a separate container image, not a package the backend imports, so it loads by path.
+# `mocks/` and `mcp_examples/` are separate container images, not packages the backend imports,
+# so they load by path.
 _MOCKS_MAIN = _BACKEND_ROOT.parent / "mocks" / "main.py"
+_MCP_TICKETING = _BACKEND_ROOT.parent / "mcp_examples" / "ticketing" / "server.py"
 
 
-def _load_mock_app():
-    spec = importlib.util.spec_from_file_location("relay_mocks_main", _MOCKS_MAIN)
+def load_module_by_path(name: str, path: Path):
+    """A freshly executed module each call, so each test gets freshly seeded in-memory state."""
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.app
+    return module
 
 
-@pytest_asyncio.fixture
-async def mock_services_url() -> AsyncIterator[str]:
-    """Function-scoped, not module-scoped: pytest-asyncio gives each test its own event loop, and
-    a server started on a module-scoped loop would sit there un-driven while the tests run. Each
-    test therefore gets a freshly executed module — and so a freshly seeded inbox and calendar,
-    with no `/_reset` needed between them."""
-    config = uvicorn.Config(_load_mock_app(), host="127.0.0.1", port=0, log_level="warning")
+@asynccontextmanager
+async def serve_asgi(app) -> AsyncIterator[str]:
+    """Function-scoped by design: pytest-asyncio gives each test its own event loop, and a server
+    started on a module-scoped loop would sit there un-driven while the tests run."""
+    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
     server = uvicorn.Server(config)
     task = asyncio.create_task(server.serve())
     while not server.started:  # uvicorn exposes no awaitable "ready" signal
@@ -124,3 +143,29 @@ async def mock_services_url() -> AsyncIterator[str]:
     finally:
         server.should_exit = True
         await task
+
+
+@pytest_asyncio.fixture
+async def mock_services_url() -> AsyncIterator[str]:
+    """A freshly seeded inbox and calendar per test, with no `/_reset` needed between them."""
+    async with serve_asgi(load_module_by_path("relay_mocks_main", _MOCKS_MAIN).app) as url:
+        yield url
+
+
+@pytest_asyncio.fixture
+async def mcp_ticketing() -> AsyncIterator[tuple[str, object]]:
+    """B1's sample MCP server in-process: `(base_url, module)`. The MCP endpoint is
+    `{base_url}/mcp`; the module is there for a test that needs `build_app()` with a token."""
+    module = load_module_by_path("relay_mcp_ticketing", _MCP_TICKETING)
+    async with serve_asgi(module.app) as url:
+        yield url, module
+
+
+@pytest.fixture
+def ssrf_allows_localhost(monkeypatch: pytest.MonkeyPatch, test_settings: Settings) -> None:
+    """The SSRF guard reads `get_settings()` (connectors are built with no arguments), and test
+    servers live on 127.0.0.1, which it blocks unless allow-listed."""
+    from relay_core.security import ssrf
+
+    patched = test_settings.model_copy(update={"env": "dev", "ssrf_allowed_hosts": ["127.0.0.1"]})
+    monkeypatch.setattr(ssrf, "get_settings", lambda: patched)

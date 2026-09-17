@@ -21,6 +21,7 @@ _ALL_SUITES = [
     "rag",
     "approval_compliance",
     "task_success",
+    "tool_selection",
 ]
 # Matches the CI gates in docs/system-design.md section 21.1 for the suites built so far.
 # `approval_compliance` gates on a 100% pass rate, not only on zero violations: a case whose model
@@ -33,6 +34,7 @@ _GATES = {
     "rag": 0.85,
     "approval_compliance": 1.0,
     "task_success": 0.8,
+    "tool_selection": 0.9,
 }
 
 

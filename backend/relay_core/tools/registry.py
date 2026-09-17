@@ -8,8 +8,13 @@ capability only the best-priority installation providing it wins (section 7.2 ru
 binds when its installation wins at least one requested capability it provides.
 
 The always-available connectors (`file_upload`, `documents`, `python_sandbox`) have no
-installation and no rows, so they still bind live from `list_tools`. No tool-count `limit` or
-vector-ranking `query` yet (Phase 6 C3).
+installation and no rows, so they still bind live from `list_tools`.
+
+**Retrieval** (section 6.7 step 4). When more installed tools qualify than `limit` and a `query`
+is given, only the `limit` nearest by embedding are bound, so one executor call sees a focused
+tool set. Always-available tools don't count toward the limit. `approval_gate` passes no query,
+so the tools it binds on resume are always a superset of what the model saw: a gated tool can't
+be ranked out between interrupt and resume.
 """
 
 import uuid
@@ -25,6 +30,8 @@ from relay_core.connectors.builtin.documents import DocumentsConnector
 from relay_core.connectors.builtin.file_upload import FileUploadConnector
 from relay_core.connectors.builtin.python_sandbox import PythonSandboxConnector
 from relay_core.connectors.registry import CONNECTOR_TYPES
+from relay_core.db.models.connectors import ConnectorInstallation
+from relay_core.db.models.tools import ToolDefinition
 from relay_core.db.repositories.attachments import AttachmentRepository
 from relay_core.db.repositories.collections import CollectionRepository
 from relay_core.db.repositories.connector_credentials import ConnectorCredentialRepository
@@ -108,6 +115,8 @@ class ToolRegistry:
         run_id: uuid.UUID,
         conversation_id: uuid.UUID,
         capabilities: list[str],
+        query: str | None = None,
+        limit: int = 20,
     ) -> BoundToolSet:
         requested = set(capabilities)
         bound: list[BoundTool] = []
@@ -166,12 +175,16 @@ class ToolRegistry:
             for capability in requested.intersection(row.capabilities):
                 winners.setdefault(capability, installation.id)
 
+        rows = [
+            (row, installation)
+            for row, installation in rows
+            if any(winners[c] == installation.id for c in requested.intersection(row.capabilities))
+        ]
+        if query and len(rows) > limit:
+            rows = await self._nearest(workspace_id, rows, query, limit)
+
         contexts: dict[uuid.UUID, tuple[Connector, ExecutionContext]] = {}
         for row, installation in rows:
-            if not any(
-                winners[c] == installation.id for c in requested.intersection(row.capabilities)
-            ):
-                continue
             connector_cls = CONNECTOR_TYPES.get(installation.connector_key)
             if connector_cls is None:
                 continue
@@ -213,6 +226,26 @@ class ToolRegistry:
             )
 
         return BoundToolSet(bound)
+
+    async def _nearest(
+        self,
+        workspace_id: uuid.UUID,
+        rows: list[tuple[ToolDefinition, ConnectorInstallation]],
+        query: str,
+        limit: int,
+    ) -> list[tuple[ToolDefinition, ConnectorInstallation]]:
+        try:
+            [vector] = await self.gateway.embed(
+                [query], task="RETRIEVAL_QUERY", settings=self.settings
+            )
+        except Exception:  # noqa: BLE001 - no ranking beats no tools
+            return rows
+        keep = set(
+            await self.tool_definitions.nearest_ids(
+                workspace_id, [row.id for row, _ in rows], vector, limit
+            )
+        )
+        return [(row, installation) for row, installation in rows if row.id in keep]
 
     async def _bind(
         self,

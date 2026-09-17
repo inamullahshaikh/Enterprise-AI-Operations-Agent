@@ -79,9 +79,9 @@ def enforce_budget(budget: Budget) -> None:
 def requires_approval(
     bound: BoundTool | None, call: types.FunctionCall, rules: ApprovalRules, user_role: str
 ) -> bool:
-    """Shared by this node and `approval_gate`, which has to classify the same turn's calls the
-    same way to line them up with the approval's `tool_call_ids`. An unknown tool is not a write
-    — it never executes at all, and gets a function error back instead."""
+    """Shared by this node and `approval_gate`, which uses it to stop a held call whose tool
+    became a write while the run was parked. An unknown tool is not a write — it never executes
+    at all, and gets a function error back instead."""
     if bound is None:
         return False
     return needs_approval(
@@ -110,6 +110,7 @@ class ExecuteStep:
             run_id=state.run_id,
             conversation_id=state.conversation_id,
             capabilities=step.required_capabilities + step.optional_capabilities,
+            query=step.goal,
         )
         rules = await self.deps.policies.approval_rules(state.workspace_id)
 

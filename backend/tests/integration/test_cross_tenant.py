@@ -4,8 +4,15 @@ non-member must not be able to distinguish "workspace doesn't exist" from
 "workspace exists but I'm not in it" — both are 404, never 403 or 200.
 """
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from relay_core.db.models.tools import ToolDefinition
+from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
+from relay_core.db.repositories.tool_definitions import ToolDefinitionRepository
 
 pytestmark = pytest.mark.asyncio
 
@@ -138,3 +145,56 @@ async def test_a_workspace_member_cannot_see_another_members_conversation(
         headers=_auth(member_token),
     )
     assert get_resp.status_code == 404
+
+
+async def test_tool_and_capability_routes_are_tenant_scoped(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    owner_token = await _register_and_get_token(client, "tools-tenant-a@example.com")
+    ws_a = (
+        await client.post("/api/v1/workspaces", json={"name": "A"}, headers=_auth(owner_token))
+    ).json()["id"]
+    me = (await client.get("/api/v1/auth/me", headers=_auth(owner_token))).json()["id"]
+    installation = await ConnectorInstallationRepository(db_session).create(
+        workspace_id=uuid.UUID(ws_a),
+        connector_key="mcp",
+        name="Tickets",
+        slug="tickets",
+        config={},
+        priority=100,
+        installed_by=uuid.UUID(me),
+    )
+    tool = await ToolDefinitionRepository(db_session).add(
+        ToolDefinition(
+            workspace_id=uuid.UUID(ws_a),
+            installation_id=installation.id,
+            name="search_tickets",
+            llm_name="tickets__search_tickets",
+            description="Search tickets",
+            input_schema={"type": "object"},
+            schema_hash="x",
+            risk="write",
+        )
+    )
+
+    other_token = await _register_and_get_token(client, "tools-tenant-b@example.com")
+    ws_b = (
+        await client.post("/api/v1/workspaces", json={"name": "B"}, headers=_auth(other_token))
+    ).json()["id"]
+    other = _auth(other_token)
+
+    # Workspace B's owner, naming A's tool through B's own workspace.
+    resp = await client.patch(
+        f"/api/v1/workspaces/{ws_b}/tools/{tool.id}", json={"risk": "read"}, headers=other
+    )
+    assert resp.status_code == 404
+    for path in ("tools", "capabilities", f"connectors/{installation.id}"):
+        assert (
+            await client.get(f"/api/v1/workspaces/{ws_a}/{path}", headers=other)
+        ).status_code == 404
+    resp = await client.patch(
+        f"/api/v1/workspaces/{ws_b}/connectors/{installation.id}",
+        json={"priority": 1},
+        headers=other,
+    )
+    assert resp.status_code == 404

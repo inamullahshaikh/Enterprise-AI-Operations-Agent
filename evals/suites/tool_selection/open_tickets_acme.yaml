@@ -1,0 +1,10 @@
+key: tool_selection_open_tickets_acme
+suite: tool_selection
+connector_profile: full
+message: "Which support tickets does Acme Robotics have open right now?"
+expectations:
+  route: task
+  must_call_tools: ["*__search_tickets"]
+  must_mention: ["Fleet dashboard not loading"]
+  approval_decision: approve_all
+tags: [tool_selection, mcp]

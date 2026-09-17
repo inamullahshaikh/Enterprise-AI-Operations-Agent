@@ -81,6 +81,8 @@ class RecordingEmailConnector(Connector):
 
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
+        # Mutable so a test can do to the binding what `PATCH /tools/{id}` does to a real row.
+        self.risk = Risk.WRITE
 
     async def list_tools(self, ctx: ExecutionContext) -> list[ToolSpec]:
         return [
@@ -92,7 +94,7 @@ class RecordingEmailConnector(Connector):
                     "properties": {"to": {"type": "string"}, "body": {"type": "string"}},
                     "required": ["to", "body"],
                 },
-                risk=Risk.WRITE,
+                risk=self.risk,
                 capabilities=["email.send"],
                 idempotent=False,
             )
@@ -140,6 +142,8 @@ def email_connector(monkeypatch: pytest.MonkeyPatch) -> RecordingEmailConnector:
         run_id: uuid.UUID,
         conversation_id: uuid.UUID,
         capabilities: list[str],
+        query: str | None = None,
+        limit: int = 20,
     ) -> BoundToolSet:
         ctx = ExecutionContext(
             workspace_id=workspace_id,
@@ -184,12 +188,19 @@ def _text_response(text: str) -> types.GenerateContentResponse:
 
 
 def _function_call_response(name: str, args: dict) -> types.GenerateContentResponse:
+    return _function_calls_response([(name, args)])
+
+
+def _function_calls_response(calls: list[tuple[str, dict]]) -> types.GenerateContentResponse:
     return types.GenerateContentResponse(
         candidates=[
             types.Candidate(
                 content=types.Content(
                     role="model",
-                    parts=[types.Part(function_call=types.FunctionCall(name=name, args=args))],
+                    parts=[
+                        types.Part(function_call=types.FunctionCall(name=name, args=args))
+                        for name, args in calls
+                    ],
                 ),
                 finish_reason=types.FinishReason.STOP,
             )
@@ -273,9 +284,7 @@ def _install_dispatchers(*, db_session, redis_client, test_settings, gateway) ->
             gateway=gateway,
         )
 
-    async def _resume(
-        workspace_id: uuid.UUID, run_id: uuid.UUID, decision: dict[str, Any]
-    ) -> None:
+    async def _resume(workspace_id: uuid.UUID, run_id: uuid.UUID, decision: dict[str, Any]) -> None:
         await resume_agent_once(
             workspace_id,
             run_id,
@@ -330,9 +339,7 @@ async def _send_and_park(
     assert send_resp.status_code == 202, send_resp.text
     run_id = send_resp.json()["run_id"]
 
-    run_resp = await client.get(
-        f"/api/v1/workspaces/{workspace_id}/runs/{run_id}", headers=headers
-    )
+    run_resp = await client.get(f"/api/v1/workspaces/{workspace_id}/runs/{run_id}", headers=headers)
     assert run_resp.json()["status"] == "awaiting_approval", run_resp.json()
 
     inbox = await client.get(f"/api/v1/workspaces/{workspace_id}/approvals", headers=headers)
@@ -380,9 +387,7 @@ async def test_write_parks_the_run_and_approving_it_resumes_to_completion(
         assert body["status"] == "completed", body
         assert body["plan"]["steps"][0]["status"] == "done"
 
-        calls = await ToolCallRepository(db_session).list_for_run(
-            workspace_id, uuid.UUID(run_id)
-        )
+        calls = await ToolCallRepository(db_session).list_for_run(workspace_id, uuid.UUID(run_id))
         assert [c.status for c in calls] == ["succeeded"]
         assert calls[0].idempotency_key is not None
     finally:
@@ -424,9 +429,7 @@ async def test_rejecting_leaves_the_action_unperformed_and_still_finishes_the_ru
         )
         assert run_resp.json()["status"] == "completed", run_resp.json()
 
-        calls = await ToolCallRepository(db_session).list_for_run(
-            workspace_id, uuid.UUID(run_id)
-        )
+        calls = await ToolCallRepository(db_session).list_for_run(workspace_id, uuid.UUID(run_id))
         assert [c.status for c in calls] == ["rejected"]
         assert calls[0].error == "Wrong recipient"
     finally:
@@ -553,9 +556,7 @@ async def test_the_watchdog_expires_an_approval_nobody_decided(
         gateway=_scripted_gateway(db_session, redis_client, test_settings, responses=_script()),
     )
     try:
-        run_id, approval_json = await _send_and_park(
-            client, headers, workspace_id, conversation_id
-        )
+        run_id, approval_json = await _send_and_park(client, headers, workspace_id, conversation_id)
         approvals = ApprovalRepository(db_session)
         approval = await approvals.get(workspace_id, uuid.UUID(approval_json["id"]))
         assert approval is not None
@@ -609,6 +610,54 @@ async def test_a_second_decision_is_refused_so_the_write_cannot_replay(
         assert second.status_code == 409, second.text
 
         assert len(email_connector.sent) == 1
+    finally:
+        app.dependency_overrides.pop(get_run_dispatcher, None)
+        app.dependency_overrides.pop(get_resume_dispatcher, None)
+
+
+async def test_lowering_a_tools_risk_mid_approval_runs_only_what_was_approved(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    redis_client: Redis,
+    test_settings,
+    email_connector: RecordingEmailConnector,
+) -> None:
+    """Phase 6 makes risk editable while an approval is pending. Two writes are proposed, only the
+    first is approved, and then the tool is lowered to `read`. Re-classifying the turn on resume
+    would now call both ungated; matching against the approval's own proposed calls runs exactly
+    the approved one, through its own row."""
+    headers, workspace_id, conversation_id = await _register(client, "risk-flip@example.com")
+    first = {"to": "ops@acme.test", "body": "Your plan renews soon."}
+    second = {"to": "cfo@acme.test", "body": "Your plan renews soon."}
+    responses = [
+        *_script()[:3],
+        _function_calls_response([(_TOOL, first), (_TOOL, second)]),
+        *_script()[4:],
+    ]
+    _install_dispatchers(
+        db_session=db_session,
+        redis_client=redis_client,
+        test_settings=test_settings,
+        gateway=_scripted_gateway(db_session, redis_client, test_settings, responses=responses),
+    )
+    try:
+        run_id, approval = await _send_and_park(client, headers, workspace_id, conversation_id)
+        first_row, second_row = approval["tool_call_ids"]
+
+        email_connector.risk = Risk.READ
+        decision = await client.post(
+            f"/api/v1/workspaces/{workspace_id}/approvals/{approval['id']}/decision",
+            json={"action": "approve", "item_ids": [first_row]},
+            headers=headers,
+        )
+        assert decision.status_code == 200, decision.text
+
+        assert email_connector.sent == [first]
+        calls = await ToolCallRepository(db_session).list_for_run(workspace_id, uuid.UUID(run_id))
+        assert {str(c.id): c.status for c in calls} == {
+            first_row: "succeeded",
+            second_row: "skipped",
+        }
     finally:
         app.dependency_overrides.pop(get_run_dispatcher, None)
         app.dependency_overrides.pop(get_resume_dispatcher, None)

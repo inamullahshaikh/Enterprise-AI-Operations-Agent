@@ -1,32 +1,48 @@
-"""Connector installation routes (docs/system-design.md section 15.3), trimmed to what
-Phase 3 needs: browse the catalog, install/inspect/uninstall/health-check a built-in
-connector, plus Phase 6's tool discovery sync (`relay_core.tools.sync`). Tool
-listing/enable-disable, OpenAPI/MCP endpoints, and capability-priority editing are later Phase 6
-tickets (docs/adr/0009). `file_upload` never appears here — it's always available rather
-than admin-installed (relay_core.capabilities.resolver / relay_core.tools.registry docstrings).
+"""Connector installation routes (docs/system-design.md section 15.3): browse the catalog;
+install, inspect, edit (name, priority, status), uninstall and health-check an installation;
+re-run its tool discovery (`relay_core.tools.sync`); and preview an OpenAPI spec before installing
+the `openapi` connector. Per-tool review and the capability map live in `relay_api.routers.tools`.
+`file_upload` never appears here — it's always available rather than admin-installed
+(relay_core.capabilities.resolver / relay_core.tools.registry docstrings).
 """
 
 import re
 import unicodedata
 import uuid
-from typing import Any
+from typing import Any, Literal
 
+import httpx
 import jsonschema
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from relay_api.deps import CurrentUser, get_kms, require_workspace_role
+from relay_api.deps import (
+    CurrentUser,
+    get_kms,
+    get_llm_gateway,
+    get_settings_dep,
+    require_workspace_role,
+)
+from relay_core.config import Settings
 from relay_core.connectors.manifest import ConnectorManifest, load_manifests
+from relay_core.connectors.openapi_spec import Preview, parse_spec, preview
 from relay_core.connectors.registry import CONNECTOR_TYPES
 from relay_core.db.models.connectors import ConnectorInstallation
 from relay_core.db.repositories.connector_credentials import ConnectorCredentialRepository
 from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.db.session import get_session
-from relay_core.security.credential_codec import decrypt_secrets, encrypt_secrets
+from relay_core.llm.gateway import LLMGateway
+from relay_core.security.credential_codec import encrypt_secrets
 from relay_core.security.crypto import LocalKMS
 from relay_core.security.rbac import Role
-from relay_core.tools.sync import SyncReport, installation_context, sync_installation
+from relay_core.security.ssrf import SSRFBlocked, guarded_client, read_capped
+from relay_core.tools.sync import (
+    SyncReport,
+    installation_context,
+    installation_secrets,
+    sync_installation,
+)
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/connectors", tags=["connectors"])
 catalog_router = APIRouter(prefix="/connectors", tags=["connectors"])
@@ -73,6 +89,12 @@ class InstallConnectorRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     secrets: dict[str, str] = Field(default_factory=dict)
     priority: int = 100
+
+
+class InstallationPatch(BaseModel):
+    name: str | None = Field(None, min_length=1)
+    priority: int | None = None
+    status: Literal["active", "disabled"] | None = None
 
 
 class InstallationOut(BaseModel):
@@ -136,6 +158,8 @@ async def install_connector(
     current: CurrentUser = Depends(require_workspace_role(Role.admin.name)),
     session: AsyncSession = Depends(get_session),
     kms: LocalKMS = Depends(get_kms),
+    gateway: LLMGateway = Depends(get_llm_gateway),
+    settings: Settings = Depends(get_settings_dep),
 ) -> InstallationOut:
     manifest = load_manifests().get(body.connector_key)
     if (
@@ -147,8 +171,16 @@ async def install_connector(
             status.HTTP_400_BAD_REQUEST, f"Unknown connector {body.connector_key!r}"
         )
 
+    # Defaults the manifest declares are applied here, where every install passes, so a connector
+    # never has to guess at a value the admin left out.
+    defaults = {
+        k: v["default"]
+        for k, v in manifest.config_schema.get("properties", {}).items()
+        if "default" in v
+    }
+    config = {**defaults, **body.config}
     for schema, payload, label in (
-        (manifest.config_schema, body.config, "config"),
+        (manifest.config_schema, config, "config"),
         (manifest.secrets_schema, body.secrets, "secrets"),
     ):
         if schema:
@@ -158,6 +190,11 @@ async def install_connector(
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST, f"Invalid {label}: {exc.message}"
                 ) from exc
+    connector = CONNECTOR_TYPES[body.connector_key]()
+    try:
+        await connector.validate_config(config)
+    except (ValueError, SSRFBlocked) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid config: {exc}") from exc
 
     installations = ConnectorInstallationRepository(session)
     base_slug = _slugify(body.name)
@@ -172,7 +209,7 @@ async def install_connector(
         connector_key=body.connector_key,
         name=body.name,
         slug=slug,
-        config=body.config,
+        config=config,
         priority=body.priority,
         installed_by=current.user.id,
     )
@@ -184,7 +221,6 @@ async def install_connector(
         )
     await session.flush()
 
-    connector = CONNECTOR_TYPES[body.connector_key]()
     ctx = installation_context(workspace_id, current.user.id, installation, body.secrets)
     try:
         await connector.on_install(ctx)
@@ -199,9 +235,40 @@ async def install_connector(
         status="active" if healthy else "error",
     )
     if healthy:
-        await sync_installation(session, kms, installation)
+        await sync_installation(session, kms, installation, gateway=gateway, settings=settings)
 
     return InstallationOut.from_model(installation)
+
+
+class OpenAPIPreviewRequest(BaseModel):
+    spec: str | None = Field(None, max_length=2_000_000)
+    spec_url: str | None = None
+
+
+@router.post("/openapi/preview", response_model=Preview)
+async def preview_openapi_spec(
+    body: OpenAPIPreviewRequest,
+    workspace_id: uuid.UUID = Path(...),
+    current: CurrentUser = Depends(require_workspace_role(Role.admin.name)),
+) -> Preview:
+    """Candidate tools from an OpenAPI 3.x spec (section 6.5 steps 1-4), pasted or fetched. The
+    admin installs an `openapi` connector with the operations they pick."""
+    if (body.spec is None) == (body.spec_url is None):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Pass exactly one of spec or spec_url")
+    text = body.spec or ""
+    if body.spec_url is not None:
+        try:
+            async with guarded_client() as http, http.stream("GET", body.spec_url) as resp:
+                resp.raise_for_status()
+                text = (await read_capped(resp)).decode("utf-8", errors="replace")
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"Could not fetch the spec: {exc}"
+            ) from exc
+    try:
+        return preview(parse_spec(text))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
 
 @router.get("/{installation_id}", response_model=InstallationOut)
@@ -212,6 +279,23 @@ async def get_installation(
     session: AsyncSession = Depends(get_session),
 ) -> InstallationOut:
     installation = await _owned_installation(session, workspace_id, installation_id)
+    return InstallationOut.from_model(installation)
+
+
+@router.patch("/{installation_id}", response_model=InstallationOut)
+async def update_installation(
+    body: InstallationPatch,
+    workspace_id: uuid.UUID = Path(...),
+    installation_id: uuid.UUID = Path(...),
+    current: CurrentUser = Depends(require_workspace_role(Role.admin.name)),
+    session: AsyncSession = Depends(get_session),
+) -> InstallationOut:
+    """Priority is how an admin picks which installation serves a capability both provide: the
+    lowest number wins (section 7.2 rule 2). The slug never changes, so tool names stay stable."""
+    installation = await _owned_installation(session, workspace_id, installation_id)
+    for field, value in body.model_dump(exclude_none=True).items():
+        setattr(installation, field, value)
+    await session.flush()
     return InstallationOut.from_model(installation)
 
 
@@ -237,6 +321,8 @@ async def test_connector(
     current: CurrentUser = Depends(require_workspace_role(Role.admin.name)),
     session: AsyncSession = Depends(get_session),
     kms: LocalKMS = Depends(get_kms),
+    gateway: LLMGateway = Depends(get_llm_gateway),
+    settings: Settings = Depends(get_settings_dep),
 ) -> InstallationOut:
     installation = await _owned_installation(session, workspace_id, installation_id)
     connector_cls = CONNECTOR_TYPES.get(installation.connector_key)
@@ -245,11 +331,7 @@ async def test_connector(
             status.HTTP_400_BAD_REQUEST, f"Unknown connector {installation.connector_key!r}"
         )
 
-    secrets: dict[str, str] = {}
-    credential = await ConnectorCredentialRepository(session).get(workspace_id, installation_id)
-    if credential is not None:
-        secrets = decrypt_secrets(kms, credential)
-
+    secrets = await installation_secrets(session, kms, installation)
     ctx = installation_context(workspace_id, current.user.id, installation, secrets)
     try:
         healthy, message = await connector_cls().health_check(ctx)
@@ -264,7 +346,7 @@ async def test_connector(
         status="active" if healthy else "error",
     )
     if healthy:
-        await sync_installation(session, kms, installation)
+        await sync_installation(session, kms, installation, gateway=gateway, settings=settings)
     return InstallationOut.from_model(installation)
 
 
@@ -275,6 +357,8 @@ async def sync_connector_tools(
     current: CurrentUser = Depends(require_workspace_role(Role.admin.name)),
     session: AsyncSession = Depends(get_session),
     kms: LocalKMS = Depends(get_kms),
+    gateway: LLMGateway = Depends(get_llm_gateway),
+    settings: Settings = Depends(get_settings_dep),
 ) -> SyncReport:
     installation = await _owned_installation(session, workspace_id, installation_id)
-    return await sync_installation(session, kms, installation)
+    return await sync_installation(session, kms, installation, gateway=gateway, settings=settings)

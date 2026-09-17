@@ -36,6 +36,9 @@ class ToolSpec(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     idempotent: bool = True
     timeout_s: float = 30.0
+    # An MCP server's `readOnlyHint`. Only ever a hint to the capability tagger: a server's own
+    # claim about itself never lowers a tool's risk.
+    read_only_hint: bool | None = None
 
 
 class ToolResult(BaseModel):
@@ -87,6 +90,11 @@ class Connector(ABC):
 
     @abstractmethod
     async def health_check(self, ctx: ExecutionContext) -> tuple[bool, str]: ...
+
+    async def validate_config(self, config: dict[str, Any]) -> None:  # noqa: B027 - optional hook
+        """Optional: reject config the manifest's JSON Schema can't express (an SSRF-blocked URL,
+        a malformed operation list) by raising `ValueError` or `SSRFBlocked`. The install route
+        turns either into a 400 before anything is written."""
 
     async def on_install(self, ctx: ExecutionContext) -> None:  # noqa: B027 - optional hook, not abstract
         """Optional: validate config, create webhooks, warm caches."""

@@ -18,9 +18,12 @@ model sees a complete, truthful account of what happened and can react to it (us
 summarizing the step without the rejected action), which is why a rejection does not simply
 fail the step.
 
-Classification has to match `execute_step` exactly — the same `requires_approval` predicate over
-the same policy — because that's what lines the gated calls up with the approval's
-`tool_call_ids`, in order.
+**Matching calls to approved rows.** Gated calls are matched against the approval's own
+`proposed_args` (tool name and arguments, in order), not re-classified with `requires_approval`.
+Risk and enablement are editable while an approval is pending (Phase 6), so re-classifying could
+shift the match and pair an approved row with a different call. A call that matches no proposed
+item was never gated; if its tool has since become a write, it doesn't run either, since nobody
+approved it.
 """
 
 import asyncio
@@ -53,6 +56,8 @@ class _PlannedCall:
     call: types.FunctionCall
     bound: BoundTool | None
     row_id: uuid.UUID | None
+    # Ungated when proposed, but its tool needs approval now (an admin raised its risk mid-wait).
+    newly_gated: bool = False
 
 
 class ApprovalGate:
@@ -73,8 +78,9 @@ class ApprovalGate:
         contents = load_contents(state.scratchpad)
         calls = _function_calls_of_last_model_turn(contents)
 
-        # Bound with the *same* capability filter `execute_step` used, so the tool set — and
-        # therefore the risk each call resolves to — is identical on both sides of the interrupt.
+        # Bound with the *same* capability filter `execute_step` used, and deliberately no
+        # retrieval `query`: the set is then a superset of what the model saw, so a proposed call
+        # can't have been ranked out of it between interrupt and resume.
         tools = await self.deps.tool_registry.tools_for_run(
             workspace_id=state.workspace_id,
             user_id=state.user_id,
@@ -116,19 +122,24 @@ class ApprovalGate:
     ) -> tuple[list[ToolResult], int]:
         """Produces one result per call, in the model turn's own order.
 
-        Gated calls are matched to their `tool_calls` row positionally: `execute_step` created
-        the rows in the order the gated calls appeared, and this walks the same turn with the
-        same predicate, so the n-th gated call here is the n-th row there.
+        `execute_step` recorded the gated calls in turn order, so walking the turn and matching
+        each call against the next proposed item pairs every approved row with exactly the call
+        a human saw.
         """
+        proposed = list(zip(approval.proposed_args, approval.tool_call_ids, strict=True))
         planned: list[_PlannedCall] = []
-        gated_index = 0
         for call in calls:
             bound = tools.lookup(call.name or "")
             row_id: uuid.UUID | None = None
-            if requires_approval(bound, call, rules, state.user_role):
-                row_id = approval.tool_call_ids[gated_index]
-                gated_index += 1
-            planned.append(_PlannedCall(call=call, bound=bound, row_id=row_id))
+            if proposed and proposed[0][0] == {
+                "tool": call.name or "",
+                "args": dict(call.args or {}),
+            }:
+                row_id = proposed.pop(0)[1]
+            newly_gated = row_id is None and requires_approval(bound, call, rules, state.user_role)
+            planned.append(
+                _PlannedCall(call=call, bound=bound, row_id=row_id, newly_gated=newly_gated)
+            )
 
         resolved = await asyncio.gather(
             *[self._run_one(state, approval, decision, p, approved_ids) for p in planned]
@@ -144,9 +155,6 @@ class ApprovalGate:
         approved_ids: set[uuid.UUID],
     ) -> tuple[ToolResult, bool]:
         call, bound, row_id = planned.call, planned.bound, planned.row_id
-        if bound is None:
-            return ToolResult(ok=False, error=f"Unknown tool {call.name!r}"), False
-
         reason = decision.get("reason")
         if row_id is not None and row_id not in approved_ids:
             await self.deps.tool_calls.mark_not_executed(
@@ -156,6 +164,23 @@ class ApprovalGate:
                 reason=reason,
             )
             return ToolResult(ok=False, error=_rejection_message(reason)), False
+        if bound is None:
+            if row_id is None:
+                return ToolResult(ok=False, error=f"Unknown tool {call.name!r}"), False
+            # Approved, but disabled or unbound while the run was parked.
+            unavailable = f"Tool {call.name!r} is no longer available"
+            await self.deps.tool_calls.mark_not_executed(
+                state.workspace_id, row_id, status="skipped", reason=unavailable
+            )
+            return ToolResult(ok=False, error=unavailable), False
+        if planned.newly_gated:
+            return (
+                ToolResult(
+                    ok=False,
+                    error="This action now needs approval and was not performed. Propose it again.",
+                ),
+                False,
+            )
 
         args = _args_for(call, decision, row_id) if row_id is not None else dict(call.args or {})
         result = await self.deps.tool_executor.run(

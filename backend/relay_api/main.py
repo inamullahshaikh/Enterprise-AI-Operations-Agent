@@ -10,6 +10,7 @@ from relay_api.routers import (
     debug,
     documents,
     runs,
+    tools,
     workspaces,
 )
 from relay_core.db.session import get_engine
@@ -29,6 +30,7 @@ app.include_router(connectors.router, prefix="/api/v1")
 app.include_router(connectors.catalog_router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
 app.include_router(approvals.router, prefix="/api/v1")
+app.include_router(tools.router, prefix="/api/v1")
 # debug.router gates itself out in prod (see its `require_non_prod` dependency)
 # rather than being conditionally mounted here, so settings are only ever read
 # per-request, never at import time.

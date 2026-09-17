@@ -10,6 +10,9 @@ a public answer for the check, `169.254.169.254` for the connect.
 `SSRFBlocked` subclasses `httpx.RequestError`, so a connector's existing `except httpx.HTTPError`
 turns a blocked URL into an ordinary tool error without a handler of its own.
 
+`guarded_mcp_http_client` is the same guard for the `mcp` SDK, which is built on `httpx2`: a fork
+with the same API but its own classes, so an `httpx` client can't be handed to it.
+
 `settings.ssrf_allowed_hosts` exempts exact hostnames from the address check, never from the
 scheme check: the dev stack's own services (`mock-services`, test servers on `127.0.0.1`) live on
 private addresses by definition.
@@ -21,6 +24,7 @@ import socket
 from typing import Any
 
 import httpx
+import httpx2
 
 from relay_core.config import get_settings
 
@@ -34,7 +38,8 @@ class SSRFBlocked(httpx.RequestError):
 
 
 async def check_url(url: str) -> None:
-    await _pinned_address(httpx.URL(url))
+    parsed = httpx.URL(url)
+    await _pinned_address(parsed.scheme, parsed.host)
 
 
 def guarded_client(**kwargs: Any) -> httpx.AsyncClient:
@@ -44,6 +49,12 @@ def guarded_client(**kwargs: Any) -> httpx.AsyncClient:
         "timeout": _TIMEOUT,
     }
     return httpx.AsyncClient(transport=_GuardedTransport(), **{**defaults, **kwargs})
+
+
+def guarded_mcp_http_client(**kwargs: Any) -> httpx2.AsyncClient:
+    """No redirect or timeout defaults: the `mcp` SDK follows same-origin redirects itself and
+    holds streams open longer than a plain request would."""
+    return httpx2.AsyncClient(transport=_GuardedMCPTransport(), **kwargs)
 
 
 async def read_capped(response: httpx.Response, max_bytes: int = MAX_RESPONSE_BYTES) -> bytes:
@@ -59,38 +70,48 @@ async def read_capped(response: httpx.Response, max_bytes: int = MAX_RESPONSE_BY
 
 class _GuardedTransport(httpx.AsyncHTTPTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        address = await _pinned_address(request.url)
-        if address is None:
-            return await super().handle_async_request(request)
-        # A copy, not an in-place edit: the client keeps `request` for resolving redirects and as
-        # `response.request`, and both must still name the hostname rather than the address.
-        pinned = httpx.Request(
-            request.method,
-            request.url.copy_with(host=address),
-            headers=request.headers,  # still carries `Host: <hostname>`
-            stream=request.stream,
-            extensions={**request.extensions, "sni_hostname": request.url.host},
-        )
-        return await super().handle_async_request(pinned)
+        return await super().handle_async_request(await _pin(request, httpx.Request))
 
 
-async def _pinned_address(url: httpx.URL) -> str | None:
+class _GuardedMCPTransport(httpx2.AsyncHTTPTransport):
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        return await super().handle_async_request(await _pin(request, httpx2.Request))
+
+
+async def _pin(request: Any, request_cls: Any) -> Any:
+    """`request` re-aimed at the address that was checked. Duck-typed over `httpx` and `httpx2`,
+    whose `Request`s share this API."""
+    address = await _pinned_address(request.url.scheme, request.url.host)
+    if address is None:
+        return request
+    # A copy, not an in-place edit: the client keeps `request` for resolving redirects and as
+    # `response.request`, and both must still name the hostname rather than the address.
+    return request_cls(
+        request.method,
+        request.url.copy_with(host=address),
+        headers=request.headers,  # still carries `Host: <hostname>`
+        stream=request.stream,
+        extensions={**request.extensions, "sni_hostname": request.url.host},
+    )
+
+
+async def _pinned_address(scheme: str, host: str) -> str | None:
     """The checked address to connect to, or `None` for an allow-listed host."""
     settings = get_settings()
     allowed_schemes = {"https", "http"} if settings.env == "dev" else {"https"}
-    if url.scheme not in allowed_schemes:
-        raise SSRFBlocked(f"URL scheme {url.scheme!r} is not allowed")
-    if not url.host:
+    if scheme not in allowed_schemes:
+        raise SSRFBlocked(f"URL scheme {scheme!r} is not allowed")
+    if not host:
         raise SSRFBlocked("URL has no host")
-    if url.host in {h.lower() for h in settings.ssrf_allowed_hosts}:
+    if host in {h.lower() for h in settings.ssrf_allowed_hosts}:
         return None
 
-    addresses = await _resolve(url.host)
+    addresses = await _resolve(host)
     if not addresses:
-        raise SSRFBlocked(f"Cannot resolve host {url.host!r}")
+        raise SSRFBlocked(f"Cannot resolve host {host!r}")
     for address in addresses:
         if _is_blocked(address):
-            raise SSRFBlocked(f"Host {url.host!r} resolves to a non-public address ({address})")
+            raise SSRFBlocked(f"Host {host!r} resolves to a non-public address ({address})")
     return addresses[0]
 
 

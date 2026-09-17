@@ -12,6 +12,9 @@ from relay_core.connectors.builtin.gmail import GmailConnector
 from relay_core.connectors.builtin.google_calendar import GoogleCalendarConnector
 from relay_core.connectors.builtin.postgres import PostgresConnector
 from relay_core.connectors.builtin.python_sandbox import PythonSandboxConnector
+from relay_core.connectors.builtin.web_search import WebSearchConnector
+from relay_core.connectors.mcp_connector import McpConnector
+from relay_core.connectors.openapi_connector import OpenApiConnector
 
 # A plain dict literal, not `{c.key: c for c in [...]}`: mypy's strict mode can't narrow the
 # comprehension's loop variable back down from the two classes' common `ABCMeta` metaclass to
@@ -23,4 +26,7 @@ CONNECTOR_TYPES: dict[str, type[Connector]] = {
     PythonSandboxConnector.key: PythonSandboxConnector,
     GmailConnector.key: GmailConnector,
     GoogleCalendarConnector.key: GoogleCalendarConnector,
+    McpConnector.key: McpConnector,
+    OpenApiConnector.key: OpenApiConnector,
+    WebSearchConnector.key: WebSearchConnector,
 }
