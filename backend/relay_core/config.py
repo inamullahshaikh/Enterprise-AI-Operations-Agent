@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # scopes by the Gmail/Calendar connector at install time (docs/adr/0007).
     google_oauth_client_id: str | None = None
     google_oauth_client_secret: str | None = None
+    # Overridable so tests and the dev stack can point the token exchange at the mock service
+    # instead of Google (docs/phase-7-tickets.md A1).
+    google_token_url: str = "https://oauth2.googleapis.com/token"
 
     # Encryption
     kms_provider: Literal["local", "aws"] = "local"

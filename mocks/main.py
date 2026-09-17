@@ -6,22 +6,22 @@ every external call these two connectors make lands here instead. Phase 7 swaps 
 OAuth against a test-mode app; until then this *is* the backend, and the connectors are written
 against it exactly as they will be written against the real APIs.
 
-State is in-memory and process-local — it resets when the container restarts, and `POST /_reset`
+State is in-memory and process-local â€” it resets when the container restarts, and `POST /_reset`
 resets it on demand so a test can start from a known inbox. Seeded from the same Northstar
 Analytics accounts as `demo/seed/02_data.sql`, so a run that reads the demo database and a run
 that reads this inbox talk about the same companies and the same people.
 
-**Idempotency-Key is honoured on every write.** That isn't decoration: Relay forwards
-`sha256(tool_call_id)` on approved writes (section 13.3), and the guarantee that a retried send
-doesn't produce a second email is only end-to-end if the far side dedupes too. Replaying a key
-returns the original response rather than creating a second record.
+**Idempotency-Key is honoured on every write**, which is more than Google does — the real Gmail
+and Calendar APIs have no such header, so the connectors no longer send one and Relay's own
+replay guard (ADR-0011) is what protects a crash between a call and its checkpoint. The handling
+stays here for the OpenAPI and MCP connectors, whose upstreams may well support it.
 
 **Two views over one store.** The `/gmail/v1/...` and `/calendar/v3/...` routes at the bottom
 mirror the real Google APIs, request and response shape included, so the connectors have exactly
 one implementation whether they point here or at Google (Phase 7 A1). The older `/gmail/...` and
 `/calendar/...` routes above them are what the connectors still call today; Phase 7 B1/B2 moves
 them over and deletes the old ones. Both read and write the same `store`, so there is no second
-copy of the data — only a second way of spelling it.
+copy of the data â€” only a second way of spelling it.
 """
 
 import base64
@@ -33,7 +33,7 @@ from urllib.parse import parse_qs
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 app = FastAPI(title="Relay Mock Services")
 
@@ -51,6 +51,10 @@ class _Store:
         # Counts tokens handed out by /oauth/token, so each one is distinguishable and a test
         # can tell a refreshed token from the one it replaced.
         self.tokens_issued = 0
+        # The `sendUpdates` value of the most recent event creation. Google has no way to read
+        # this back, so the mock keeps it for the one assertion that matters: a connector must
+        # not ask for invitations to be mailed unless an admin configured that.
+        self.last_send_updates: str | None = None
 
 
 def _seed_messages() -> list[dict[str, Any]]:
@@ -68,7 +72,7 @@ def _seed_messages() -> list[dict[str, Any]]:
             "from": email,
             "to": "ops@northstar.example",
             "subject": subject,
-            "snippet": f"Hi team — {subject.lower()}...",
+            "snippet": f"Hi team â€” {subject.lower()}...",
             "body": (
                 f"Hi team,\n\n{subject}. Could someone from {company} account management "
                 f"get back to me this week?\n\nThanks."
@@ -93,9 +97,9 @@ def _seed_events() -> list[dict[str, Any]]:
         }
         for i, (title, offset, attendees) in enumerate(
             [
-                ("Renewal sync — Acme Robotics", 1, ["jordan@acmerobotics.example"]),
+                ("Renewal sync â€” Acme Robotics", 1, ["jordan@acmerobotics.example"]),
                 ("Pipeline review", 3, ["ops@northstar.example"]),
-                ("QBR — Globex", 2, ["priya@globex.example"]),
+                ("QBR â€” Globex", 2, ["priya@globex.example"]),
             ]
         )
     ]
@@ -119,6 +123,19 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/_stats")
+async def stats() -> dict[str, Any]:
+    """Test/demo affordance: what this process has been asked to do since the last reset."""
+    return {
+        "messages": len(store.messages),
+        "drafts": len(store.drafts),
+        "sent": len(store.sent),
+        "events": len(store.events),
+        "tokens_issued": store.tokens_issued,
+        "last_send_updates": store.last_send_updates,
+    }
+
+
 @app.post("/_reset")
 async def reset() -> dict[str, str]:
     """Test-only: restores the seeded inbox and calendar and forgets every draft, sent message
@@ -129,54 +146,6 @@ async def reset() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------- Gmail
-
-
-@app.get("/gmail/messages")
-async def search_messages(
-    q: str = Query("", description="Case-insensitive substring match"),
-    max_results: int = Query(10, ge=1, le=50),
-) -> list[dict[str, Any]]:
-    """Substring matching, not Gmail's real query syntax — enough for the agent to find a
-    thread by sender or subject, and deterministic, which the real operators are not."""
-    needle = q.strip().lower()
-    matches = [
-        m
-        for m in store.messages
-        if not needle
-        or needle in m["subject"].lower()
-        or needle in m["from"].lower()
-        or needle in m["body"].lower()
-    ]
-    return [{k: v for k, v in m.items() if k != "body"} for m in matches[:max_results]]
-
-
-@app.get("/gmail/messages/{message_id}")
-async def get_message(message_id: str) -> dict[str, Any]:
-    for message in store.messages:
-        if message["id"] == message_id:
-            return message
-    raise HTTPException(404, "Message not found")
-
-
-class DraftRequest(BaseModel):
-    to: list[str]
-    subject: str
-    body: str
-    cc: list[str] = Field(default_factory=list)
-    thread_id: str | None = None
-
-
-@app.post("/gmail/drafts", status_code=201)
-async def create_draft(
-    body: DraftRequest, idempotency_key: str | None = Header(None, alias="Idempotency-Key")
-) -> dict[str, Any]:
-    replay = _replayed(idempotency_key)
-    if replay is not None:
-        return replay
-    draft = _store_draft(
-        to=body.to, cc=body.cc, subject=body.subject, body=body.body, thread_id=body.thread_id
-    )
-    return _remember(idempotency_key, draft)
 
 
 def _store_draft(
@@ -194,28 +163,27 @@ def _store_draft(
         "sent": False,
     }
     store.drafts[draft_id] = draft
+    # A draft is a real message in Gmail, fetchable by id like any other. Registering it here is
+    # what lets a test read back what the connector composed, decoded from `raw`.
+    store.messages.append(
+        {
+            "id": f"msg-{draft_id}",
+            "thread_id": thread_id or f"thread-{draft_id}",
+            "from": "ops@northstar.example",
+            "to": ", ".join(to),
+            "subject": subject,
+            "snippet": body[:80],
+            "body": body,
+            "date": draft["created_at"],
+        }
+    )
     return draft
 
 
 @app.get("/gmail/drafts")
 async def list_drafts() -> list[dict[str, Any]]:
-    """Not a tool the agent calls — a test/demo affordance for asserting what was created."""
+    """Not a tool the agent calls â€” a test/demo affordance for asserting what was created."""
     return list(store.drafts.values())
-
-
-@app.post("/gmail/drafts/{draft_id}/send")
-async def send_draft(
-    draft_id: str, idempotency_key: str | None = Header(None, alias="Idempotency-Key")
-) -> dict[str, Any]:
-    replay = _replayed(idempotency_key)
-    if replay is not None:
-        return replay
-    draft = store.drafts.get(draft_id)
-    if draft is None:
-        raise HTTPException(404, "Draft not found")
-    if draft["sent"]:
-        raise HTTPException(409, "Draft has already been sent")
-    return _remember(idempotency_key, _send_draft(draft))
 
 
 def _send_draft(draft: dict[str, Any]) -> dict[str, Any]:
@@ -240,15 +208,6 @@ async def list_sent() -> list[dict[str, Any]]:
 # ------------------------------------------------------------------------- Calendar
 
 
-@app.get("/calendar/events")
-async def list_events(
-    time_min: str | None = None,
-    time_max: str | None = None,
-    calendar_id: str = "primary",
-) -> list[dict[str, Any]]:
-    return _events_between(calendar_id, time_min, time_max)
-
-
 def _events_between(
     calendar_id: str, time_min: str | None, time_max: str | None
 ) -> list[dict[str, Any]]:
@@ -258,67 +217,6 @@ def _events_between(
     if time_max:
         events = [e for e in events if e["start"] <= time_max]
     return sorted(events, key=lambda e: e["start"])
-
-
-class FreeSlotsRequest(BaseModel):
-    attendees: list[str] = Field(default_factory=list)
-    duration_min: int = 30
-    time_min: str | None = None
-    time_max: str | None = None
-
-
-@app.post("/calendar/free-slots")
-async def find_free_slots(body: FreeSlotsRequest) -> list[dict[str, Any]]:
-    """Walks working hours (09:00-17:00 UTC) over the next five days and returns the gaps that
-    none of `attendees` is already booked into. Deliberately simple — the point is a stable,
-    checkable answer, not a scheduling engine."""
-    busy = [
-        (e["start"], e["end"])
-        for e in store.events
-        if not body.attendees or set(body.attendees) & set(e["attendees"])
-    ]
-    duration = timedelta(minutes=body.duration_min)
-    day = datetime.now(UTC).replace(hour=9, minute=0, second=0, microsecond=0)
-    slots: list[dict[str, Any]] = []
-    for offset in range(5):
-        cursor = day + timedelta(days=offset)
-        end_of_day = cursor.replace(hour=17)
-        while cursor + duration <= end_of_day:
-            slot_end = cursor + duration
-            overlaps = any(
-                start < slot_end.isoformat() and cursor.isoformat() < end for start, end in busy
-            )
-            if not overlaps:
-                slots.append({"start": cursor.isoformat(), "end": slot_end.isoformat()})
-            cursor = slot_end
-    return slots[:10]
-
-
-class EventRequest(BaseModel):
-    title: str
-    start: str
-    end: str
-    attendees: list[str] = Field(default_factory=list)
-    description: str = ""
-    calendar_id: str = "primary"
-
-
-@app.post("/calendar/events", status_code=201)
-async def create_event(
-    body: EventRequest, idempotency_key: str | None = Header(None, alias="Idempotency-Key")
-) -> dict[str, Any]:
-    replay = _replayed(idempotency_key)
-    if replay is not None:
-        return replay
-    event = _store_event(
-        calendar_id=body.calendar_id,
-        title=body.title,
-        start=body.start,
-        end=body.end,
-        attendees=body.attendees,
-        description=body.description,
-    )
-    return _remember(idempotency_key, event)
 
 
 def _store_event(
@@ -442,7 +340,7 @@ async def _google_error(_: Request, exc: GoogleError) -> JSONResponse:
 
 
 async def bearer(authorization: str | None = Header(None)) -> str:
-    """Every Google route demands a token. The value isn't checked — what matters is that the
+    """Every Google route demands a token. The value isn't checked â€” what matters is that the
     connectors are exercised against a server that refuses an unauthenticated request."""
     token = (authorization or "").removeprefix("Bearer ").strip()
     if not authorization or not authorization.startswith("Bearer ") or not token:
@@ -643,6 +541,7 @@ async def gcal_create_event(
     send_updates: str = Query("none", alias="sendUpdates"),
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> dict[str, Any]:
+    store.last_send_updates = send_updates
     replay = _replayed(idempotency_key)
     if replay is not None:
         return replay

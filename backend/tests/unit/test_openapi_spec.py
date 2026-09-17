@@ -105,5 +105,8 @@ def test_the_mock_services_own_fastapi_spec_parses() -> None:
     result = preview(parse_spec(json.dumps(module.app.openapi())))
 
     ops = {op.path: op for op in result.operations if op.method == "get"}
-    assert ops["/gmail/messages/{message_id}"].input_schema["required"] == ["message_id"]
+    assert ops["/gmail/v1/users/{user_id}/messages/{message_id}"].input_schema["required"] == [
+        "user_id",
+        "message_id",
+    ]
     assert any(op.has_body and op.risk is Risk.WRITE for op in result.operations)

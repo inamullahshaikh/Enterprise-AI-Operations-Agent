@@ -1,9 +1,9 @@
 # docs/system-design.md section 10.3.
 #
-# `auth_type: oauth2` describes where this connector is going, not where it is: Phase 5 points
-# `base_url` at the mock service (section 21.2) and leaves `access_token` empty, and Phase 7
-# adds the real Google OAuth flow that fills it. Nothing in the connector changes between the
-# two — only the base URL and whether a token is present.
+# Phase 7 B1 points this at the real Gmail REST API: `base_url` is https://gmail.googleapis.com
+# in production and the mock service (section 21.2) in dev and eval runs. The paths and shapes
+# are identical either way, so nothing in the connector changes between them — only the base URL
+# and the token, which the connector OAuth flow writes.
 key: gmail
 display_name: Gmail
 category: email
@@ -20,13 +20,18 @@ config_schema:
     sender_address:
       type: string
       format: email
-      description: Address drafts are composed from.
+      description: >-
+        Which mailbox this installation is connected to. Metadata only, since the API always
+        drafts as the authorized account.
 secrets_schema:
   type: object
   properties:
     access_token:
       type: string
-      description: OAuth2 access token. Left empty when pointed at the mock service.
+      description: OAuth2 access token. Written by the connector OAuth flow.
+    refresh_token:
+      type: string
+      description: OAuth2 refresh token. Written by the connector OAuth flow.
 provides_capabilities:
   - email.read
   - email.draft

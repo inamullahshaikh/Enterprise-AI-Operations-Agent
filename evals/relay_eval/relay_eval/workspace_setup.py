@@ -126,12 +126,20 @@ async def _ensure_mock_installations(
     # The MCP server's tools arrive untagged, so installing it needs the real tagger: that the
     # agent can then plan against what the tagger assigned is part of what `full` evaluates.
     gateway = build_llm_gateway(session, redis, settings)
-    installs = [
-        (key, f"Eval {key} (mock)", {"base_url": settings.mock_services_url})
-        for key in ("gmail", "google_calendar", "web_search")
+    # gmail and google_calendar speak the real Google APIs (Phase 7 B1/B2), so they need a
+    # bearer token even against the mock — the mock demands one exactly as Google does. Any
+    # string works here; only a real installation's token is a real token.
+    google_secrets = {"access_token": "eval-mock-token"}
+    installs: list[tuple[str, str, dict, dict]] = [
+        (key, f"Eval {key} (mock)", {"base_url": settings.mock_services_url}, secrets)
+        for key, secrets in (
+            ("gmail", google_secrets),
+            ("google_calendar", google_secrets),
+            ("web_search", {}),
+        )
     ]
-    installs.append(("mcp", "Eval ticketing (MCP)", {"url": settings.mcp_ticketing_url}))
-    for connector_key, name, config in installs:
+    installs.append(("mcp", "Eval ticketing (MCP)", {"url": settings.mcp_ticketing_url}, {}))
+    for connector_key, name, config, secrets in installs:
         await ensure_installation(
             session,
             kms,
@@ -141,6 +149,7 @@ async def _ensure_mock_installations(
             name=name,
             slug=f"eval-{connector_key.replace('_', '-')}",
             config=config,
+            secrets=secrets,
             gateway=gateway,
             settings=settings,
         )

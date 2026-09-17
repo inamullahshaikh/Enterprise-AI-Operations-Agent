@@ -1,4 +1,8 @@
-# docs/system-design.md section 10.4. Same mock-now / OAuth-in-Phase-7 arrangement as gmail.yaml.
+# docs/system-design.md section 10.4.
+#
+# Phase 7 B2 points this at the real Calendar REST API. `base_url` is
+# https://www.googleapis.com in production and the mock service in dev and eval runs; the paths
+# and shapes are identical either way.
 key: google_calendar
 display_name: Google Calendar
 category: calendar
@@ -15,12 +19,26 @@ config_schema:
     default_calendar_id:
       type: string
       default: primary
+    time_zone:
+      type: string
+      description: IANA time zone sent with every event, so slots and invites agree.
+      default: UTC
+    send_updates:
+      type: string
+      enum: [none, all, externalOnly]
+      description: >-
+        Whether Google emails invitations when an event is created. Defaults to none so a demo
+        or eval run never mails real people; set it deliberately.
+      default: none
 secrets_schema:
   type: object
   properties:
     access_token:
       type: string
-      description: OAuth2 access token. Left empty when pointed at the mock service.
+      description: OAuth2 access token. Written by the connector OAuth flow.
+    refresh_token:
+      type: string
+      description: OAuth2 refresh token. Written by the connector OAuth flow.
 provides_capabilities:
   - calendar.read
   - calendar.write

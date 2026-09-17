@@ -1,7 +1,9 @@
 """The `openapi` connector (Phase 6 B5): preview the mock service's own spec, install two of its
 operations, and call them."""
 
+import base64
 import uuid
+from email.message import EmailMessage
 
 import httpx
 import pytest
@@ -35,16 +37,19 @@ async def _install(client: AsyncClient, mock_services_url: str, extra: list[dict
     )
     assert resp.status_code == 200, resp.text
     by_path = {(op["method"], op["path"]): op for op in resp.json()["operations"]}
-    search = by_path[("get", "/gmail/messages")]
-    draft = {**by_path[("post", "/gmail/drafts")], "risk": "read"}  # a client-sent risk is ignored
+    search = by_path[("get", "/gmail/v1/users/{user_id}/messages")]
+    # A client-sent risk is ignored: the server recomputes it from the HTTP method.
+    draft = {**by_path[("post", "/gmail/v1/users/{user_id}/drafts")], "risk": "read"}
 
     resp = await client.post(
         api,
         json={
             "connector_key": "openapi",
             "name": "Mailbox API",
+            "secrets": {"token": "test-access-token"},
             "config": {
                 "base_url": mock_services_url,
+                "auth": {"type": "bearer"},
                 "operations": [search, draft, *(extra or [])],
             },
         },
@@ -52,7 +57,7 @@ async def _install(client: AsyncClient, mock_services_url: str, extra: list[dict
     )
     assert resp.status_code == 201, resp.text
     installation = resp.json()
-    assert installation["health"] == "healthy", installation
+    assert installation["health"] == "healthy", installation.get("health_message")
     return uuid.UUID(ws["id"]), installation, search["name"], draft["name"]
 
 
@@ -65,8 +70,20 @@ def _ctx(installation: dict, idempotency_key: str | None = None) -> ExecutionCon
         conversation_id=installation_id,
         installation_id=str(installation_id),
         config=installation["config"],
+        secrets={"token": "test-access-token"},
         idempotency_key=idempotency_key,
     )
+
+
+def _draft_body(to: str, subject: str) -> dict:
+    """Gmail wants a base64url RFC 5322 message, so an OpenAPI installation pointed at it has to
+    send one too — the spec is the same one the built-in `gmail` connector calls."""
+    message = EmailMessage()
+    message["To"] = to
+    message["Subject"] = subject
+    message.set_content("Hello")
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode().rstrip("=")
+    return {"message": {"raw": raw}}
 
 
 async def test_selected_operations_become_rows_and_the_get_returns_seeded_data(
@@ -79,9 +96,12 @@ async def test_selected_operations_become_rows_and_the_get_returns_seeded_data(
     )
     assert {r.name: r.risk for r in rows} == {search: "read", draft: "write"}
 
-    result = await OpenApiConnector().call_tool(_ctx(installation), search, {"q": "renewal"})
+    result = await OpenApiConnector().call_tool(
+        _ctx(installation), search, {"user_id": "me", "q": "renewal"}
+    )
     assert result.ok, result.error
-    assert [m["from"] for m in result.content] == ["jordan@acmerobotics.example"]
+    # Gmail's list call returns ids only, which is what an admin gets from this spec too.
+    assert [m["id"] for m in result.content["messages"]] == ["msg-1"]
 
 
 async def test_a_path_argument_cannot_walk_to_another_endpoint(
@@ -90,16 +110,18 @@ async def test_a_path_argument_cannot_walk_to_another_endpoint(
     poke = {
         "name": "poke_draft",
         "method": "post",
-        "path": "/gmail/drafts/{draft_id}",
+        "path": "/gmail/v1/users/me/drafts/{draft_id}",
         "input_schema": {"type": "object", "properties": {"draft_id": {"type": "string"}}},
         "params": [{"name": "draft_id", "location": "path"}],
     }
     _, installation, _, draft = await _install(client, mock_services_url, extra=[poke])
     connector = OpenApiConnector()
-    body = {"to": ["jordan@acmerobotics.example"], "subject": "Hi", "body": "Hello"}
-    assert (await connector.call_tool(_ctx(installation), draft, {"body": body})).ok
+    body = _draft_body("jordan@acmerobotics.example", "Hi")
+    assert (
+        await connector.call_tool(_ctx(installation), draft, {"user_id": "me", "body": body})
+    ).ok
 
-    # Unencoded, this would be POST /gmail/drafts/../../_reset, i.e. POST /_reset.
+    # Unencoded, this would be POST /gmail/v1/users/me/drafts/../../../../_reset.
     result = await connector.call_tool(
         _ctx(installation), "poke_draft", {"draft_id": "../../_reset"}
     )
@@ -113,13 +135,14 @@ async def test_a_post_forwards_the_idempotency_key(
 ) -> None:
     _, installation, _, draft = await _install(client, mock_services_url)
     connector = OpenApiConnector()
-    body = {"to": ["priya@globex.example"], "subject": "Seats", "body": "Hello"}
+    body = _draft_body("priya@globex.example", "Seats")
+    args = {"user_id": "me", "body": body}
 
-    first = await connector.call_tool(_ctx(installation, "key-1"), draft, {"body": body})
-    again = await connector.call_tool(_ctx(installation, "key-1"), draft, {"body": body})
+    first = await connector.call_tool(_ctx(installation, "key-1"), draft, args)
+    again = await connector.call_tool(_ctx(installation, "key-1"), draft, args)
 
     assert first.ok and again.ok
-    assert first.content["draft_id"] == again.content["draft_id"]
+    assert first.content["id"] == again.content["id"]
     async with httpx.AsyncClient(base_url=mock_services_url) as http:
         assert len((await http.get("/gmail/drafts")).json()) == 1
 

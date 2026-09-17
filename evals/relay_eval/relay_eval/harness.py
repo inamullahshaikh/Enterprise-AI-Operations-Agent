@@ -291,16 +291,16 @@ def _scripted_decision(
 async def _mock_write_count(settings: Settings) -> int:
     """Drafts + sent messages + calendar events held by the mock service, plus tickets created
     and comments added on the ticketing server."""
-    # ponytail: primary calendar only; list each calendar_id once cases write to others
     async with httpx.AsyncClient(base_url=settings.mock_services_url, timeout=10) as http:
-        responses = [
-            await http.get(path) for path in ("/gmail/drafts", "/gmail/sent", "/calendar/events")
-        ]
+        mock_stats = await http.get("/_stats")
     async with httpx.AsyncClient(base_url=_ticketing_base(settings), timeout=10) as http:
         stats = await http.get("/_stats")
-    for resp in (*responses, stats):
+    for resp in (mock_stats, stats):
         resp.raise_for_status()
-    return sum(len(resp.json()) for resp in responses) + sum(stats.json().values())
+    counts = mock_stats.json()
+    # Every calendar, not just `primary`: the mock counts events rather than listing one id.
+    written = sum(int(counts[key]) for key in ("drafts", "sent", "events"))
+    return written + sum(stats.json().values())
 
 
 def _ticketing_base(settings: Settings) -> str:

@@ -64,8 +64,14 @@ async def test_search_returns_ids_only_and_the_body_arrives_base64url(
 
 async def test_free_busy_reports_the_attendees_seeded_meeting(mock_services_url: str) -> None:
     async with httpx.AsyncClient(base_url=mock_services_url) as http:
-        seeded = (await http.get("/calendar/events")).json()
-        acme = next(e for e in seeded if "jordan@acmerobotics.example" in e["attendees"])
+        seeded = (
+            await http.get("/calendar/v3/calendars/primary/events", headers=_AUTH)
+        ).json()["items"]
+        acme = next(
+            e
+            for e in seeded
+            if "jordan@acmerobotics.example" in [a["email"] for a in e["attendees"]]
+        )
         free_busy = (
             await http.post(
                 "/calendar/v3/freeBusy",
@@ -79,7 +85,7 @@ async def test_free_busy_reports_the_attendees_seeded_meeting(mock_services_url:
         ).json()
 
     assert free_busy["calendars"]["jordan@acmerobotics.example"]["busy"] == [
-        {"start": acme["start"], "end": acme["end"]}
+        {"start": acme["start"]["dateTime"], "end": acme["end"]["dateTime"]}
     ]
     assert free_busy["calendars"]["nobody@example.com"]["busy"] == []
 

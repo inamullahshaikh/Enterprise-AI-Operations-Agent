@@ -132,10 +132,15 @@ class OpenApiConnector(Connector):
 
 
 def _auth_headers(auth: _Auth, secrets: dict[str, str]) -> dict[str, str]:
+    """A missing secret sends no header at all. An empty one is worse than useless: httpx
+    refuses a header value with a trailing space, so `Bearer ` fails the request locally with a
+    transport error that reads like the host is unreachable."""
     if auth.type == "bearer":
-        return {"Authorization": f"Bearer {secrets.get('token', '')}"}
+        token = secrets.get("token", "")
+        return {"Authorization": f"Bearer {token}"} if token else {}
     if auth.type == "api_key_header" and auth.header_name:
-        return {auth.header_name: secrets.get("api_key", "")}
+        key = secrets.get("api_key", "")
+        return {auth.header_name: key} if key else {}
     if auth.type == "basic":
         pair = f"{secrets.get('username', '')}:{secrets.get('password', '')}".encode()
         return {"Authorization": f"Basic {base64.b64encode(pair).decode()}"}

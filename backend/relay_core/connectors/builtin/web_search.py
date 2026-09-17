@@ -127,9 +127,7 @@ async def _fetch(url: str) -> ToolResult:
     content_type = resp.headers.get("content-type", "").split(";")[0].strip()
     text = raw.decode(resp.encoding or "utf-8", errors="replace")
     if content_type == "text/html":
-        parser = _TextOnly()
-        parser.feed(text)
-        text = " ".join(" ".join(parser.parts).split())
+        text = html_to_text(text)
     elif content_type != "text/plain" and "json" not in content_type:
         return ToolResult(ok=False, error=f"Unsupported content type {content_type!r}")
     return ToolResult(
@@ -137,6 +135,14 @@ async def _fetch(url: str) -> ToolResult:
         content={"url": url, "text": text[:_MAX_TEXT]},
         truncated=len(text) > _MAX_TEXT,
     )
+
+
+def html_to_text(html: str) -> str:
+    """Tags out, whitespace collapsed. Shared with `gmail`, which needs the same treatment for an
+    HTML-only message body."""
+    parser = _TextOnly()
+    parser.feed(html)
+    return " ".join(" ".join(parser.parts).split())
 
 
 class _TextOnly(HTMLParser):

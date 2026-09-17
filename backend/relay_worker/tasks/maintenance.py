@@ -115,6 +115,10 @@ async def seed_demo() -> None:
                 name=name,
                 slug=f"northstar-{connector_key.replace('_', '-')}",
                 config={"base_url": settings.mock_services_url},
+                # Both connectors speak the real Google APIs (Phase 7 B1/B2) and the mock
+                # demands a bearer token exactly as Google does. A demo installation pointed at
+                # a real Google account gets its token from the OAuth flow instead.
+                secrets={"access_token": "demo-mock-token"},
             )
 
         await session.commit()
