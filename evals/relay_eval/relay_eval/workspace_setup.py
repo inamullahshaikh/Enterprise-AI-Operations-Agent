@@ -17,20 +17,16 @@ from pathlib import Path
 
 from redis.asyncio import Redis
 from relay_core.config import Settings
-from relay_core.connectors.base import ExecutionContext
 from relay_core.connectors.builtin.csv_profile import infer_capabilities, profile_csv
-from relay_core.connectors.builtin.postgres import PostgresConnector
+from relay_core.connectors.installs import ensure_installation
 from relay_core.db.repositories.attachments import AttachmentRepository
 from relay_core.db.repositories.collections import CollectionRepository
-from relay_core.db.repositories.connector_credentials import ConnectorCredentialRepository
-from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.db.repositories.conversations import ConversationRepository
 from relay_core.db.repositories.documents import DocumentRepository
 from relay_core.db.repositories.users import UserRepository
 from relay_core.db.repositories.workspaces import WorkspaceMemberRepository, WorkspaceRepository
 from relay_core.llm.gateway import build_llm_gateway
 from relay_core.rag.ingest import ingest_document
-from relay_core.security.credential_codec import encrypt_secrets
 from relay_core.security.crypto import LocalKMS
 from relay_core.security.passwords import hash_password
 from relay_core.security.rbac import Role
@@ -79,8 +75,10 @@ async def ensure_workspace_for_profile(
         )
         await session.flush()
 
-    if profile == "db_only":
+    if profile in ("db_only", "full"):
         await _ensure_postgres_installation(session, settings, kms, user_id, workspace.id)
+    if profile == "full":
+        await _ensure_mock_installations(session, settings, kms, user_id, workspace.id)
     elif profile == "docs_only":
         await _ensure_documents_ingested(session, settings, redis, user_id, workspace.id)
 
@@ -95,54 +93,46 @@ async def _ensure_postgres_installation(
     workspace_id: uuid.UUID,
 ) -> None:
     if not settings.demo_db_url:
-        raise RuntimeError("DEMO_DB_URL is not set — the db_only eval profile needs it")
-    installations = ConnectorInstallationRepository(session)
-    if await installations.get_by_slug(workspace_id, _INSTALLATION_SLUG) is not None:
-        return
-
+        raise RuntimeError("DEMO_DB_URL is not set — the db_only/full eval profiles need it")
     url = make_url(settings.demo_db_url)
-    config = {
-        "host": url.host,
-        "port": url.port or 5432,
-        "database": url.database,
-        "schemas": ["public"],
-        "statement_timeout_s": 10,
-        "row_limit": 500,
-    }
-    installation = await installations.create(
+    await ensure_installation(
+        session,
+        kms,
         workspace_id=workspace_id,
+        user_id=user_id,
         connector_key="postgres",
         name="Eval demo DB",
         slug=_INSTALLATION_SLUG,
-        config=config,
-        priority=100,
-        installed_by=user_id,
+        config={
+            "host": url.host,
+            "port": url.port or 5432,
+            "database": url.database,
+            "schemas": ["public"],
+            "statement_timeout_s": 10,
+            "row_limit": 500,
+        },
+        secrets={"username": url.username or "", "password": url.password or ""},
     )
-    secrets = {"username": url.username or "", "password": url.password or ""}
-    await ConnectorCredentialRepository(session).put(
-        workspace_id=workspace_id,
-        installation_id=installation.id,
-        encrypted=encrypt_secrets(kms, secrets),
-    )
-    await session.flush()
 
-    ctx = ExecutionContext(
-        workspace_id=workspace_id,
-        user_id=user_id,
-        run_id=installation.id,
-        conversation_id=installation.id,
-        installation_id=str(installation.id),
-        config=config,
-        secrets=secrets,
-    )
-    healthy, message = await PostgresConnector().health_check(ctx)
-    await installations.set_health(
-        workspace_id,
-        installation.id,
-        health="healthy" if healthy else "down",
-        message=message,
-        status="active" if healthy else "error",
-    )
+
+async def _ensure_mock_installations(
+    session: AsyncSession,
+    settings: Settings,
+    kms: LocalKMS,
+    user_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+) -> None:
+    for connector_key in ("gmail", "google_calendar"):
+        await ensure_installation(
+            session,
+            kms,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            connector_key=connector_key,
+            name=f"Eval {connector_key} (mock)",
+            slug=f"eval-{connector_key.replace('_', '-')}",
+            config={"base_url": settings.mock_services_url},
+        )
 
 
 async def _ensure_documents_ingested(

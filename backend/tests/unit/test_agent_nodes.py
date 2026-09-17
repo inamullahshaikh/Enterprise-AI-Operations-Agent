@@ -57,6 +57,9 @@ def _deps(gateway: FakeGateway) -> AgentDeps:
         documents=None,  # type: ignore[arg-type]
         tool_registry=None,  # type: ignore[arg-type]
         tool_executor=None,  # type: ignore[arg-type]
+        approvals=None,  # type: ignore[arg-type]
+        policies=None,  # type: ignore[arg-type]
+        members=None,  # type: ignore[arg-type]
     )
 
 

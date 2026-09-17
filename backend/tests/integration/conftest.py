@@ -7,11 +7,14 @@ Requires a reachable Docker daemon — every test here errors (not skips) if one
 isn't running, since `postgres_url`/`redis_url` fail to start their containers.
 """
 
+import asyncio
+import importlib.util
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
+import uvicorn
 from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
 from redis.asyncio import Redis
@@ -90,3 +93,34 @@ async def client(
     finally:
         app.dependency_overrides.clear()
         await redis_client.aclose()
+
+
+# `mocks/` is a separate container image, not a package the backend imports, so it loads by path.
+_MOCKS_MAIN = _BACKEND_ROOT.parent / "mocks" / "main.py"
+
+
+def _load_mock_app():
+    spec = importlib.util.spec_from_file_location("relay_mocks_main", _MOCKS_MAIN)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.app
+
+
+@pytest_asyncio.fixture
+async def mock_services_url() -> AsyncIterator[str]:
+    """Function-scoped, not module-scoped: pytest-asyncio gives each test its own event loop, and
+    a server started on a module-scoped loop would sit there un-driven while the tests run. Each
+    test therefore gets a freshly executed module — and so a freshly seeded inbox and calendar,
+    with no `/_reset` needed between them."""
+    config = uvicorn.Config(_load_mock_app(), host="127.0.0.1", port=0, log_level="warning")
+    server = uvicorn.Server(config)
+    task = asyncio.create_task(server.serve())
+    while not server.started:  # uvicorn exposes no awaitable "ready" signal
+        await asyncio.sleep(0.01)
+    port = server.servers[0].sockets[0].getsockname()[1]
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        await task

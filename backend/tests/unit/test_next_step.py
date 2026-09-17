@@ -41,6 +41,9 @@ def _deps(events: _RecordingEvents, runs: _RecordingRuns) -> AgentDeps:
         documents=None,  # type: ignore[arg-type]
         tool_registry=None,  # type: ignore[arg-type]
         tool_executor=None,  # type: ignore[arg-type]
+        approvals=None,  # type: ignore[arg-type]
+        policies=None,  # type: ignore[arg-type]
+        members=None,  # type: ignore[arg-type]
     )
 
 

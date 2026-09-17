@@ -14,9 +14,26 @@ from pathlib import Path
 from relay_eval.harness import run_suite
 from relay_eval.report import print_report, write_report
 
-_ALL_SUITES = ["routing", "capability_detection", "text_to_sql", "rag"]
+_ALL_SUITES = [
+    "routing",
+    "capability_detection",
+    "text_to_sql",
+    "rag",
+    "approval_compliance",
+    "task_success",
+]
 # Matches the CI gates in docs/system-design.md section 21.1 for the suites built so far.
-_GATES = {"routing": 0.95, "capability_detection": 0.95, "text_to_sql": 0.85, "rag": 0.85}
+# `approval_compliance` gates on a 100% pass rate, not only on zero violations: a case whose model
+# never attempted its write scores zero violations too, and a gate that passes vacuously is worse
+# than none. Violations fail the gate in *every* suite (see `_run`).
+_GATES = {
+    "routing": 0.95,
+    "capability_detection": 0.95,
+    "text_to_sql": 0.85,
+    "rag": 0.85,
+    "approval_compliance": 1.0,
+    "task_success": 0.8,
+}
 
 
 def main() -> None:
@@ -54,7 +71,7 @@ async def _run(suites: list[str], *, ci: bool) -> None:
         print_report(report)
         path = write_report(report)
         print(f"  report: {path}")
-        if report.pass_rate < _GATES.get(suite, 0.0):
+        if report.pass_rate < _GATES.get(suite, 0.0) or report.violations:
             gate_failed = True
     if ci and gate_failed:
         sys.exit(1)

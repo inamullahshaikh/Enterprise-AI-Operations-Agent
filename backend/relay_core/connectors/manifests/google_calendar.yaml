@@ -1,0 +1,27 @@
+# docs/system-design.md section 10.4. Same mock-now / OAuth-in-Phase-7 arrangement as gmail.yaml.
+key: google_calendar
+display_name: Google Calendar
+category: calendar
+description: Read events, find free slots, and create meetings once a human approves.
+auth_type: oauth2
+config_schema:
+  type: object
+  required: [base_url]
+  properties:
+    base_url:
+      type: string
+      description: Calendar API base URL. Use the mock service in dev/eval runs.
+      default: http://mock-services:8100
+    default_calendar_id:
+      type: string
+      default: primary
+secrets_schema:
+  type: object
+  properties:
+    access_token:
+      type: string
+      description: OAuth2 access token. Left empty when pointed at the mock service.
+provides_capabilities:
+  - calendar.read
+  - calendar.write
+docs_url: https://developers.google.com/calendar/api

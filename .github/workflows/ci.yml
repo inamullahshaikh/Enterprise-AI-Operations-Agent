@@ -66,13 +66,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      # relay_eval too: test_eval_approval_compliance.py drives the harness to prove its
+      # approval_compliance gate can go red.
+      - run: pip install -e ".[dev]" -e ../evals/relay_eval
       - run: pytest tests/integration
 
   eval-harness:
     # docs/system-design.md section 21.5 / 28 Phase 3 "done when": relay-eval run --all --ci
-    # blocks the build if routing/capability_detection/text_to_sql/rag miss their gate (section
-    # 21.1). Unlike unit-tests/integration-tests, this runs through the real graph against a
+    # blocks the build if any suite misses its gate (section 21.1) or any case in any suite
+    # executes a write without approval (approval_compliance, Phase 5). Unlike unit-tests/integration-tests, this runs through the real graph against a
     # real Gemini API and real R2 storage (evals/README.md), not a scripted client or
     # testcontainers-only fixtures — it needs GEMINI_API_KEY and R2_* as repo secrets
     # (Settings.gemini_api_key / .r2_*, backend/relay_core/config.py) since it costs real
@@ -115,6 +117,7 @@ jobs:
       LANGGRAPH_DB_URL: postgresql://relay:relay@localhost:5432/relay
       REDIS_URL: redis://localhost:6379/0
       DEMO_DB_URL: postgresql://acme:acme@localhost:5433/acme
+      MOCK_SERVICES_URL: http://localhost:8100
       KMS_PROVIDER: local
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
@@ -134,6 +137,14 @@ jobs:
         run: |
           PGPASSWORD=acme psql -h localhost -p 5433 -U acme -d acme -f ../demo/seed/01_schema.sql
           PGPASSWORD=acme psql -h localhost -p 5433 -U acme -d acme -f ../demo/seed/02_data.sql
+      - name: Start the mock Gmail/Calendar service
+        # Run from source rather than as a `services:` container: mocks/ is built locally, and
+        # service containers start before actions/checkout (same reason as demo-db above).
+        working-directory: mocks
+        run: |
+          nohup uvicorn main:app --port 8100 > "$RUNNER_TEMP/mocks.log" 2>&1 &
+          for _ in $(seq 30); do curl -sf localhost:8100/healthz && exit 0; sleep 1; done
+          cat "$RUNNER_TEMP/mocks.log"; exit 1
       - name: Migrate Relay's own database
         run: alembic upgrade head
       - name: Generate a throwaway JWT keypair and KMS master key

@@ -2,7 +2,16 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from relay_api.errors import install_error_handlers
-from relay_api.routers import auth, connectors, conversations, debug, documents, runs, workspaces
+from relay_api.routers import (
+    approvals,
+    auth,
+    connectors,
+    conversations,
+    debug,
+    documents,
+    runs,
+    workspaces,
+)
 from relay_core.db.session import get_engine
 
 app = FastAPI(
@@ -19,6 +28,7 @@ app.include_router(runs.router, prefix="/api/v1")
 app.include_router(connectors.router, prefix="/api/v1")
 app.include_router(connectors.catalog_router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
+app.include_router(approvals.router, prefix="/api/v1")
 # debug.router gates itself out in prod (see its `require_non_prod` dependency)
 # rather than being conditionally mounted here, so settings are only ever read
 # per-request, never at import time.

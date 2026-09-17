@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     web_search_provider: str = "tavily"
     web_search_api_key: str | None = None
     use_mock_connectors: bool = True
+    # Where `mocks/main.py` answers for gmail/google_calendar (section 21.2). Read by
+    # `seed_demo` and the eval harness when they install those connectors; an installation
+    # stores its own `base_url`, so nothing in the request path reads this.
+    mock_services_url: str = "http://mock-services:8100"
 
 
 @lru_cache

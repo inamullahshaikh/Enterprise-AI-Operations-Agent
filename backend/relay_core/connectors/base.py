@@ -59,6 +59,17 @@ class ExecutionContext(BaseModel):
     installation_id: str
     config: dict[str, Any] = Field(default_factory=dict)
     secrets: dict[str, str] = Field(default_factory=dict)
+    # Workspace governance values a connector must honour itself, because they can't be
+    # enforced generically: the email domain allow-list (section 10.3) only means anything to
+    # something that knows which argument holds recipients. Populated by `ToolRegistry` from
+    # `workspace_policies`; connectors that don't care simply ignore it.
+    policy: dict[str, Any] = Field(default_factory=dict)
+    # Set per *call*, not per run (`ToolExecutor` copies the context to attach it), and only for
+    # approved writes. A connector whose upstream supports it should forward this as an
+    # `Idempotency-Key` header: Relay's own replay guard protects against a crash between the
+    # call and its checkpoint, but only the upstream can dedupe a request it already received
+    # (docs/system-design.md section 13.3).
+    idempotency_key: str | None = None
 
 
 class Connector(ABC):

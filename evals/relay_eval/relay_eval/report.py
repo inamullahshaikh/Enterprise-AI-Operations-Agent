@@ -30,6 +30,7 @@ def write_report(report: SuiteReport) -> Path:
     payload = {
         "suite": report.suite,
         "pass_rate": report.pass_rate,
+        "violations": report.violations,
         "results": [
             {
                 "key": r.key,
@@ -37,6 +38,7 @@ def write_report(report: SuiteReport) -> Path:
                 "reasons": r.reasons,
                 "cost_usd": str(r.cost_usd),
                 "latency_s": r.latency_s,
+                "violations": r.violations,
             }
             for r in report.results
         ],

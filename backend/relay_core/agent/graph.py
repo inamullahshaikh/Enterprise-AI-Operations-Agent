@@ -1,6 +1,15 @@
-"""Graph wiring (docs/system-design.md sections 8.2, 8.4). `approval_gate`, `replan`, and
-`validate_final` are still deferred — Phase 3's built-in tools are all `read` risk (no writes
-to gate), and there's no replanning or final groundedness check until Phase 5/7.
+"""Graph wiring (docs/system-design.md sections 8.2, 8.4). `replan` and `validate_final` are
+still deferred — there's no replanning or final groundedness check until Phase 7.
+
+`approval_gate` (Phase 5) sits between `execute_step` and `validate_step`, and is the only node
+that can suspend the graph. `execute_step` routes to it by returning a `pending_approval_id`;
+it interrupts, the worker exits, and the run is resumed later against the same checkpoint. On
+the way back it returns to `execute_step`, not onward to `validate_step`: the decision has been
+folded into the scratchpad as a function response, and the step's ReAct loop still has to run to
+completion so the model can react to what did or didn't happen. A rejection is not a failure
+route for the same reason — the design's `approval_gate -> replan` edge needs a `replan` node
+that doesn't exist yet, so a declined action comes back to the model as a rejection result and
+the step summarizes around it.
 
 The checkpointer is passed in rather than constructed here, so the one real
 `AsyncPostgresSaver` (built once per worker process by `get_postgres_checkpointer`,
@@ -19,6 +28,7 @@ from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from relay_core.agent.deps import AgentDeps
+from relay_core.agent.nodes.approval_gate import ApprovalGate
 from relay_core.agent.nodes.ask_missing import AskMissing
 from relay_core.agent.nodes.check_capabilities import CheckCapabilities
 from relay_core.agent.nodes.direct_answer import DirectAnswer
@@ -33,6 +43,10 @@ from relay_core.agent.nodes.synthesize import Synthesize
 from relay_core.agent.nodes.validate_step import ValidateStep
 from relay_core.agent.state import AgentState
 from relay_core.config import Settings
+
+
+def _route_after_execute(state: AgentState) -> Literal["approval_gate", "validate_step"]:
+    return "approval_gate" if state.pending_approval_id is not None else "validate_step"
 
 
 def _route_after_validate(state: AgentState) -> Literal["execute_step", "next_step"]:
@@ -56,6 +70,7 @@ def build_graph(deps: AgentDeps) -> StateGraph[AgentState]:
     g.add_node("ask_missing", AskMissing(deps))
     g.add_node("next_step", NextStep(deps))
     g.add_node("execute_step", ExecuteStep(deps))
+    g.add_node("approval_gate", ApprovalGate(deps))
     g.add_node("validate_step", ValidateStep(deps))
     g.add_node("synthesize", Synthesize(deps))
     g.add_node("finalize", Finalize(deps))
@@ -74,7 +89,8 @@ def build_graph(deps: AgentDeps) -> StateGraph[AgentState]:
     g.add_conditional_edges(
         "next_step", lambda s: "execute_step" if s.current_step_id else "synthesize"
     )
-    g.add_edge("execute_step", "validate_step")
+    g.add_conditional_edges("execute_step", _route_after_execute)
+    g.add_edge("approval_gate", "execute_step")
     g.add_conditional_edges("validate_step", _route_after_validate)
     g.add_edge("synthesize", "finalize")
     g.add_edge("direct_answer", "finalize")

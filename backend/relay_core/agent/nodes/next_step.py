@@ -71,4 +71,11 @@ class NextStep:
         await self.deps.runs.set_plan(
             state.workspace_id, state.run_id, plan.model_dump(mode="json")
         )
-        return {"plan": plan, "current_step_id": next_step_.id if next_step_ is not None else None}
+        # Clearing `scratchpad` is what keeps section 8.6's "scratchpad is per step" promise:
+        # each step starts from its own prompt, and one step's Gemini turns never leak into the
+        # next one's context.
+        return {
+            "plan": plan,
+            "current_step_id": next_step_.id if next_step_ is not None else None,
+            "scratchpad": [],
+        }

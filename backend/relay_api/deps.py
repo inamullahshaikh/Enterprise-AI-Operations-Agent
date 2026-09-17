@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import cast
+from typing import Any, cast
 
 from fastapi import Depends, HTTPException, Path, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -29,6 +29,7 @@ from relay_core.storage.object_store import ObjectStore, build_object_store
 __all__ = [
     "CurrentUser",
     "IngestDispatcher",
+    "ResumeDispatcher",
     "RunDispatcher",
     "get_current_user",
     "get_genai_client",
@@ -37,6 +38,7 @@ __all__ = [
     "get_llm_gateway",
     "get_object_store",
     "get_redis",
+    "get_resume_dispatcher",
     "get_run_dispatcher",
     "get_settings_dep",
     "require_non_prod",
@@ -111,6 +113,25 @@ def get_run_dispatcher() -> RunDispatcher:
         from relay_worker.tasks.agent import run_agent
 
         run_agent.delay(str(workspace_id), str(run_id))
+
+    return _dispatch
+
+
+ResumeDispatcher = Callable[[uuid.UUID, uuid.UUID, dict[str, Any]], Awaitable[None]]
+
+
+def get_resume_dispatcher() -> ResumeDispatcher:
+    """Restarts a run parked at `approval_gate` once someone has decided
+    (docs/system-design.md section 13.2). Same override-for-tests shape as
+    `get_run_dispatcher`; the decision travels as a plain dict because that is exactly what
+    LangGraph hands back from `interrupt()`."""
+
+    async def _dispatch(
+        workspace_id: uuid.UUID, run_id: uuid.UUID, decision: dict[str, Any]
+    ) -> None:
+        from relay_worker.tasks.agent import resume_agent
+
+        resume_agent.delay(str(workspace_id), str(run_id), decision)
 
     return _dispatch
 

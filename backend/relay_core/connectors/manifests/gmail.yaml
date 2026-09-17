@@ -1,0 +1,34 @@
+# docs/system-design.md section 10.3.
+#
+# `auth_type: oauth2` describes where this connector is going, not where it is: Phase 5 points
+# `base_url` at the mock service (section 21.2) and leaves `access_token` empty, and Phase 7
+# adds the real Google OAuth flow that fills it. Nothing in the connector changes between the
+# two — only the base URL and whether a token is present.
+key: gmail
+display_name: Gmail
+category: email
+description: Search and read email, compose drafts, and send them once a human approves.
+auth_type: oauth2
+config_schema:
+  type: object
+  required: [base_url]
+  properties:
+    base_url:
+      type: string
+      description: Mailbox API base URL. Use the mock service in dev/eval runs.
+      default: http://mock-services:8100
+    sender_address:
+      type: string
+      format: email
+      description: Address drafts are composed from.
+secrets_schema:
+  type: object
+  properties:
+    access_token:
+      type: string
+      description: OAuth2 access token. Left empty when pointed at the mock service.
+provides_capabilities:
+  - email.read
+  - email.draft
+  - email.send
+docs_url: https://developers.google.com/gmail/api

@@ -8,6 +8,8 @@ class-level registry, so that lives in `relay_core.tools.registry.ToolRegistry` 
 from relay_core.connectors.base import Connector
 from relay_core.connectors.builtin.documents import DocumentsConnector
 from relay_core.connectors.builtin.file_upload import FileUploadConnector
+from relay_core.connectors.builtin.gmail import GmailConnector
+from relay_core.connectors.builtin.google_calendar import GoogleCalendarConnector
 from relay_core.connectors.builtin.postgres import PostgresConnector
 from relay_core.connectors.builtin.python_sandbox import PythonSandboxConnector
 
@@ -19,4 +21,6 @@ CONNECTOR_TYPES: dict[str, type[Connector]] = {
     FileUploadConnector.key: FileUploadConnector,
     DocumentsConnector.key: DocumentsConnector,
     PythonSandboxConnector.key: PythonSandboxConnector,
+    GmailConnector.key: GmailConnector,
+    GoogleCalendarConnector.key: GoogleCalendarConnector,
 }

@@ -1,12 +1,16 @@
-"""One-time local/dev bootstrap: creates a demo workspace and installs a `postgres` connector
-pointing at the seeded `demo-db` service (docs/system-design.md section 27), so `make seed`
-leaves a ready-to-demo workspace instead of an empty one. Idempotent — safe to run again.
+"""Maintenance jobs, plus the one-time local/dev bootstrap.
 
-Run directly (`python -m relay_worker.tasks.maintenance seed_demo`), not as a Celery task:
-this only ever needs to run once per environment, by a human, not on a schedule or in response
-to an event, so it doesn't need the task queue's retry/routing machinery. Later Phase 8
-maintenance jobs (retention, budget resets) that genuinely are scheduled register as real
-Celery tasks in this same module instead.
+`seed_demo` creates a demo workspace and installs a `postgres` connector pointing at the seeded
+`demo-db` service (docs/system-design.md section 27), plus `gmail` and `google_calendar` pointing
+at the mock service, so `make seed` leaves a ready-to-demo workspace instead of an empty one.
+Idempotent — safe to run again. It runs directly (`python -m relay_worker.tasks.maintenance
+seed_demo`), not as a Celery task: it only ever needs to run once per environment, by a human,
+not on a schedule.
+
+`expire_stale_approvals` is the first genuinely scheduled job here (Phase 5, section 13.4). An
+undecided approval must not pin a run open forever, so once its window has elapsed the approval,
+its proposed calls and the run itself are all closed out as expired. Phase 8's retention and
+budget-reset jobs register alongside it.
 """
 
 import asyncio
@@ -19,23 +23,22 @@ from redis.asyncio import Redis
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from relay_core.approvals import expire_stale_approvals as expire_stale_approvals_once
 from relay_core.config import Settings, get_settings
-from relay_core.connectors.base import ExecutionContext
-from relay_core.connectors.builtin.postgres import PostgresConnector
+from relay_core.connectors.installs import ensure_installation
 from relay_core.db.repositories.collections import CollectionRepository
-from relay_core.db.repositories.connector_credentials import ConnectorCredentialRepository
-from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.db.repositories.documents import DocumentRepository
 from relay_core.db.repositories.users import UserRepository
 from relay_core.db.repositories.workspaces import WorkspaceMemberRepository, WorkspaceRepository
 from relay_core.db.session import get_sessionmaker
+from relay_core.events.publisher import EventPublisher
 from relay_core.llm.gateway import LLMGateway, build_llm_gateway
 from relay_core.rag.ingest import ingest_document
-from relay_core.security.credential_codec import encrypt_secrets
 from relay_core.security.crypto import build_kms
 from relay_core.security.passwords import hash_password
 from relay_core.security.rbac import Role
 from relay_core.storage.object_store import ObjectStore, build_object_store
+from relay_worker.app import app
 
 _DEMO_EMAIL = "demo@relay.local"
 _DEMO_PASSWORD = "relay-demo-only"  # local/dev fixture only — never used outside seed_demo
@@ -79,50 +82,39 @@ async def seed_demo() -> None:
                 workspace_id=workspace.id, user_id=user.id, role=Role.owner.name
             )
 
-        installations = ConnectorInstallationRepository(session)
-        installation = await installations.get_by_slug(workspace.id, _DEMO_INSTALLATION_SLUG)
-        if installation is None:
-            config = {
+        await ensure_installation(
+            session,
+            kms,
+            workspace_id=workspace.id,
+            user_id=user.id,
+            connector_key="postgres",
+            name="Northstar demo DB",
+            slug=_DEMO_INSTALLATION_SLUG,
+            config={
                 "host": url.host,
                 "port": url.port or 5432,
                 "database": url.database,
                 "schemas": ["public"],
                 "statement_timeout_s": 10,
                 "row_limit": 500,
-            }
-            installation = await installations.create(
-                workspace_id=workspace.id,
-                connector_key="postgres",
-                name="Northstar demo DB",
-                slug=_DEMO_INSTALLATION_SLUG,
-                config=config,
-                priority=100,
-                installed_by=user.id,
-            )
-            secrets = {"username": url.username or "", "password": url.password or ""}
-            await ConnectorCredentialRepository(session).put(
-                workspace_id=workspace.id,
-                installation_id=installation.id,
-                encrypted=encrypt_secrets(kms, secrets),
-            )
-            await session.flush()
-
-            ctx = ExecutionContext(
+            },
+            secrets={"username": url.username or "", "password": url.password or ""},
+        )
+        # Phase 5's renewal scenario (section 28) ends in drafted emails, so the demo workspace
+        # needs somewhere to draft them: both connectors point at the mock service.
+        for connector_key, name in (
+            ("gmail", "Gmail (mock)"),
+            ("google_calendar", "Calendar (mock)"),
+        ):
+            await ensure_installation(
+                session,
+                kms,
                 workspace_id=workspace.id,
                 user_id=user.id,
-                run_id=installation.id,
-                conversation_id=installation.id,
-                installation_id=str(installation.id),
-                config=config,
-                secrets=secrets,
-            )
-            healthy, message = await PostgresConnector().health_check(ctx)
-            await installations.set_health(
-                workspace.id,
-                installation.id,
-                health="healthy" if healthy else "down",
-                message=message,
-                status="active" if healthy else "error",
+                connector_key=connector_key,
+                name=name,
+                slug=f"northstar-{connector_key.replace('_', '-')}",
+                config={"base_url": settings.mock_services_url},
             )
 
         await session.commit()
@@ -190,6 +182,22 @@ async def _seed_demo_documents(
             settings=settings,
         )
         print(f"  ingested demo document: {title}")
+
+
+@app.task(name="relay_worker.tasks.maintenance.expire_stale_approvals")  # type: ignore[untyped-decorator]
+def expire_stale_approvals() -> None:
+    asyncio.run(_expire_stale_approvals_async())
+
+
+async def _expire_stale_approvals_async() -> None:
+    settings = get_settings()
+    redis = Redis.from_url(settings.redis_url)
+    try:
+        async with get_sessionmaker()() as session:
+            await expire_stale_approvals_once(session, EventPublisher(redis))
+            await session.commit()
+    finally:
+        await redis.aclose()
 
 
 if __name__ == "__main__":

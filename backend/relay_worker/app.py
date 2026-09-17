@@ -19,7 +19,18 @@ app.conf.update(
     },
 )
 
-from relay_worker.tasks import agent, ingest  # noqa: E402, F401 -- registers the tasks
+app.conf.beat_schedule = {
+    # An undecided approval holds a run open and a checkpoint alive, so the sweep has to run on
+    # its own schedule rather than piggybacking on request traffic — an abandoned workspace
+    # generates none. Five minutes is fine granularity against a 24 h window
+    # (`Approval.DEFAULT_EXPIRY_HOURS`); the cost is one indexed query per tick.
+    "expire-stale-approvals": {
+        "task": "relay_worker.tasks.maintenance.expire_stale_approvals",
+        "schedule": 300.0,
+    },
+}
+
+from relay_worker.tasks import agent, ingest, maintenance  # noqa: E402, F401 -- registers tasks
 
 # Later phases add their task modules here, e.g.:
-# from relay_worker.tasks import memory, connectors, maintenance, evals
+# from relay_worker.tasks import memory, connectors, evals

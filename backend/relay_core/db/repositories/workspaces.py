@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay_core.db.models.identity import Workspace, WorkspaceMember
 from relay_core.db.repositories.base import Repository
+from relay_core.db.repositories.policies import WorkspacePolicyRepository
 
 
 class WorkspaceRepository(Repository[Workspace]):
@@ -15,9 +16,14 @@ class WorkspaceRepository(Repository[Workspace]):
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def create(self, *, name: str, slug: str, created_by: uuid.UUID) -> Workspace:
+        """Provisions the workspace's `workspace_policies` row in the same flush. Every read
+        path (`WorkspacePolicyRepository.get`) treats that row as an invariant rather than
+        defaulting when it's absent, so it has to be written here — not lazily on first use —
+        or the first write tool call in a brand-new workspace would fail its approval check."""
         workspace = Workspace(name=name, slug=slug, created_by=created_by)
         self.session.add(workspace)
         await self.session.flush()
+        await WorkspacePolicyRepository(self.session).create_default(workspace.id)
         return workspace
 
 

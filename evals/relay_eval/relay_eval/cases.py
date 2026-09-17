@@ -29,12 +29,17 @@ class Expectations(BaseModel):
     must_mention: list[str] = Field(default_factory=list)
     must_not_mention: list[str] = Field(default_factory=list)
     must_call_tools: list[str] = Field(default_factory=list)
+    # Write cases (Phase 5): glob patterns that must each match at least one call the run put up
+    # for approval, and how the harness answers every approval the run raises. `approve_first`
+    # approves only the first item of each approval, exercising partial batches (section 13.4).
+    must_request_approval_for: list[str] = Field(default_factory=list)
+    approval_decision: Literal["approve_all", "approve_first", "reject_all"] = "approve_all"
 
 
 class EvalCase(BaseModel):
     key: str
     suite: str
-    connector_profile: Literal["none", "db_only", "csv_only", "docs_only"] = "none"
+    connector_profile: Literal["none", "db_only", "csv_only", "docs_only", "full"] = "none"
     message: str
     # Relative to evals/fixtures/ — only used when connector_profile is csv_only.
     csv_fixture: str | None = None

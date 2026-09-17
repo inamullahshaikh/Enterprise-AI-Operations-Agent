@@ -2,7 +2,8 @@
 the conversation. Conversation summaries (section 12.1) and memories (section 12) are Phase 7
 features — `history_summary` is always `None` and there's no `memories` field on `AgentState`
 yet. `available_capabilities` is now resolved for real (`relay_core.capabilities.resolver`,
-Phase 3) instead of hardcoded to `[]`.
+Phase 3) instead of hardcoded to `[]`, and Phase 5 adds `user_role`, which section 13.1's
+approval rules need.
 """
 
 from typing import Any
@@ -32,7 +33,12 @@ class LoadContext:
             workspace_id=state.workspace_id,
             conversation_id=state.conversation_id,
         )
+        # Membership can be revoked between the message being queued and the worker picking it
+        # up, so fall back to the least privileged role — that direction only ever asks for
+        # more approvals, never fewer.
+        member = await self.deps.members.get(state.workspace_id, state.user_id)
         return {
             "recent_messages": [{"role": m.role, "content": m.content} for m in history],
             "available_capabilities": available_capabilities,
+            "user_role": member.role if member is not None else "viewer",
         }

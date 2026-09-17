@@ -49,11 +49,15 @@ def _valid_postgres_body(postgres_url: str, name: str = "Demo DB") -> dict:
     }
 
 
-async def test_catalog_lists_postgres_but_not_file_upload(client: AsyncClient) -> None:
+async def test_catalog_lists_installable_connectors_but_not_always_available_ones(
+    client: AsyncClient,
+) -> None:
+    """`file_upload`, `documents` and `python_sandbox` are always available in every workspace
+    and have nothing to configure, so they never appear in the install catalog."""
     resp = await client.get("/api/v1/connectors/catalog")
     assert resp.status_code == 200
     keys = {m["key"] for m in resp.json()}
-    assert keys == {"postgres"}
+    assert keys == {"postgres", "gmail", "google_calendar"}
 
 
 async def test_admin_can_install_and_the_health_check_runs_for_real(

@@ -1,7 +1,10 @@
-"""Graph state (docs/system-design.md section 8.3). `pending_approval_id` is still deferred —
-`approval_gate` doesn't exist until Phase 5, and none of Phase 3's built-in tools are ever
-`write`/`destructive` (postgres and file_upload are read-only), so there's nothing yet that
-would set it.
+"""Graph state (docs/system-design.md section 8.3).
+
+Everything here is checkpointed, which makes the field shapes a compatibility surface: a run
+parked on `awaiting_approval` is resumed by a *different* worker process, reading state this
+process wrote. Phase 5's additions — `scratchpad` and `pending_approval_id` — are what make that
+resume possible, and `relay_core.agent.scratchpad` explains why the former is stored as
+serialized dicts rather than the Gemini SDK's own `Content` objects.
 """
 
 import uuid
@@ -63,6 +66,11 @@ class AgentState(BaseModel):
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
     history_summary: str | None = None
     available_capabilities: list[str] = Field(default_factory=list)
+    # The triggering user's workspace role, snapshotted by `load_context`. Feeds section 13.1's
+    # approval rules, where a `never` rule only waives approval for owners and admins. Held in
+    # state rather than re-read per call so a mid-run membership change can't flip the approval
+    # decision for a run that's already executing.
+    user_role: str = "member"
 
     # routing & planning
     route: Literal["direct", "task", "blocked"] | None = None
@@ -71,16 +79,20 @@ class AgentState(BaseModel):
 
     # execution (relay_core.agent.nodes.execute_step / validate_step / next_step / synthesize)
     current_step_id: str | None = None
-    # No `scratchpad` field: section 8.3's design keeps the Gemini `Content` turns for the
-    # in-progress step in graph state so they survive an `approval_gate` interrupt and resume
-    # exactly where they left off. Phase 3 has no interrupts — every built-in tool this phase
-    # ships is `read` risk, so `execute_step` never pauses mid-step — so the whole bounded
-    # ReAct loop runs inside one node call and keeps its turns in a local variable instead.
-    # Add it back here when Phase 5's approval gate needs a step to survive across invocations.
+    # Section 8.3's per-step Gemini turns, as serialized dicts rather than `types.Content` —
+    # see `relay_core.agent.scratchpad` for why, and for the thought-signature constraint that
+    # makes the encoding load-bearing. Whole-object replace, not a reducer: `execute_step`
+    # rewrites the list each time it hands control to `approval_gate`, and `next_step` clears it
+    # when the step ends, so appending would leak one step's turns into the next.
+    scratchpad: list[dict[str, Any]] = Field(default_factory=list)
     step_outputs: Annotated[dict[str, str], or_] = Field(default_factory=dict)
     sources: Annotated[list[dict[str, Any]], add] = Field(default_factory=list)
     artifacts: Annotated[list[dict[str, Any]], add] = Field(default_factory=list)
     budget: Budget = Field(default_factory=Budget)
+
+    # approvals (relay_core.agent.nodes.approval_gate) — set by `execute_step` when a step's
+    # write calls need a human, cleared once the decision has been folded into the scratchpad.
+    pending_approval_id: uuid.UUID | None = None
 
     # output
     final_answer: str | None = None

@@ -26,6 +26,7 @@ from relay_core.db.repositories.connector_credentials import ConnectorCredential
 from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.db.repositories.document_chunks import DocumentChunkRepository
 from relay_core.db.repositories.documents import DocumentRepository
+from relay_core.db.repositories.policies import WorkspacePolicyRepository
 from relay_core.db.repositories.tool_calls import ToolCallRepository
 from relay_core.llm.gateway import LLMGateway
 from relay_core.security.credential_codec import decrypt_secrets
@@ -97,6 +98,7 @@ class ToolRegistry:
         self.documents = DocumentRepository(session)
         self.chunks = DocumentChunkRepository(session)
         self.tool_calls = ToolCallRepository(session)
+        self.policies = WorkspacePolicyRepository(session)
 
     async def tools_for_run(
         self,
@@ -111,12 +113,19 @@ class ToolRegistry:
         manifests = load_manifests()
         bound: list[BoundTool] = []
 
+        # Read once per run and handed to every connector, rather than per call: these are
+        # governance values a connector enforces itself (`ExecutionContext.policy`), and a
+        # policy edit mid-run shouldn't change the rules under a run already in flight.
+        policy = await self.policies.get(workspace_id)
+        policy_values = {"email_domain_allow": list(policy.email_domain_allow)}
+
         file_upload_ctx = ExecutionContext(
             workspace_id=workspace_id,
             user_id=user_id,
             run_id=run_id,
             conversation_id=conversation_id,
             installation_id="file_upload",
+            policy=policy_values,
         )
         file_upload = FileUploadConnector(self.attachments, self.object_store)
         bound.extend(await self._bind(file_upload, "file_upload", None, file_upload_ctx, requested))
@@ -127,6 +136,7 @@ class ToolRegistry:
             run_id=run_id,
             conversation_id=conversation_id,
             installation_id="documents",
+            policy=policy_values,
         )
         documents_connector = DocumentsConnector(
             self.collections, self.documents, self.chunks, self.gateway, self.settings
@@ -141,6 +151,7 @@ class ToolRegistry:
             run_id=run_id,
             conversation_id=conversation_id,
             installation_id="python_sandbox",
+            policy=policy_values,
         )
         sandbox_connector = PythonSandboxConnector(
             self.tool_calls, self.object_store, self.settings
@@ -172,6 +183,7 @@ class ToolRegistry:
                 installation_id=str(installation.id),
                 config=installation.config,
                 secrets=secrets,
+                policy=policy_values,
             )
             bound.extend(
                 await self._bind(

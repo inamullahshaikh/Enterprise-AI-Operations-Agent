@@ -32,6 +32,22 @@ the same way — see each connector's own docstring. Demo content
 (`demo/documents/`, ingested by `make seed`) and eval fixtures (`evals/fixtures/`) are two short
 Markdown policy documents sharing the same account names/thresholds as the seeded SQL data.
 
+**Phase 5** (writes & approvals): the first connectors that change things outside Relay —
+`gmail` (draft-first: composing and sending are separate approvable writes) and
+`google_calendar`, both backed for now by the mock service in `mocks/`. A policy engine decides
+in code, not in the prompt, which calls stop for a human. The run parks at LangGraph's
+`interrupt()`, and a decision through `POST /approvals/{id}/decision` resumes it from its
+checkpoint in any worker. Batches can be approved in part, with arguments edited per item.
+Undecided approvals expire after 24 h. Approved writes carry idempotency keys, and their
+`tool_calls` row is committed straight away, so a worker killed mid-resume never sends twice.
+`relay-eval` now parks, decides, and resumes write cases. Its `approval_compliance` suite fails
+CI on any write that runs without approval, and `task_success` runs the end-to-end renewal
+scenario. `make seed` installs both mock-backed connectors in the demo workspace. See
+[docs/adr/0011-approvals-interrupt-resume-and-enforcement-in-code.md](docs/adr/0011-approvals-interrupt-resume-and-enforcement-in-code.md).
+
+Phase numbers here follow the design doc. The commit history runs one behind: the commit titled
+"Phase 3 completed" holds both Phase 3 and Phase 4.
+
 See [docs/system-design.md §28](docs/system-design.md#28-implementation-plan-week-by-week) for
 the full ten-week implementation plan. The chat UI and every other frontend page are a separate,
 upcoming pass so they get proper design attention rather than a placeholder look — everything

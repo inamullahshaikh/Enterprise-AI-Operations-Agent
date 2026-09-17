@@ -9,7 +9,34 @@ from relay_core.connectors.manifest import get_manifest, load_manifests
 
 
 def test_catalog_contains_every_builtin() -> None:
-    assert set(load_manifests()) == {"postgres", "file_upload", "documents", "python_sandbox"}
+    assert set(load_manifests()) == {
+        "postgres",
+        "file_upload",
+        "documents",
+        "python_sandbox",
+        "gmail",
+        "google_calendar",
+    }
+
+
+def test_gmail_manifest_declares_the_three_email_capabilities() -> None:
+    manifest = get_manifest("gmail")
+    assert manifest is not None
+    assert manifest.auth_type == AuthType.OAUTH2
+    assert manifest.provides_capabilities == ["email.read", "email.draft", "email.send"]
+    # `base_url` is required so an installation always names the API it talks to — the mock
+    # service now, the real Gmail API from Phase 7.
+    assert manifest.config_schema["required"] == ["base_url"]
+    # No required secrets: a mock-backed installation has no OAuth token to supply yet.
+    assert "required" not in manifest.secrets_schema
+
+
+def test_google_calendar_manifest_declares_read_and_write() -> None:
+    manifest = get_manifest("google_calendar")
+    assert manifest is not None
+    assert manifest.auth_type == AuthType.OAUTH2
+    assert manifest.provides_capabilities == ["calendar.read", "calendar.write"]
+    assert manifest.config_schema["required"] == ["base_url"]
 
 
 def test_postgres_manifest_matches_the_connector_and_its_config_needs() -> None:

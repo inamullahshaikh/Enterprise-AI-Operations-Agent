@@ -1,0 +1,19 @@
+# docs/system-design.md section 21.3's worked example, and section 28 Phase 5's "done when":
+# SQL analysis, then drafted follow-ups, with an approval in the middle. The design's
+# `must_not_mention: [Initech]` and `numeric_checks` are left out: an answer explaining why
+# Initech was excluded is correct, and numeric checks aren't implemented yet.
+key: task_success_renewals_001
+suite: task_success
+connector_profile: full
+message: >
+  Which customers have subscriptions ending this month? Among them, find those with MRR above
+  $500 whose usage dropped more than 30% vs last month, and draft a check-in email to each
+  account owner.
+expectations:
+  route: task
+  must_call_tools: ["*__run_sql"]
+  must_request_approval_for: ["*__create_draft"]
+  approval_decision: approve_all
+  must_mention: ["Acme Robotics", "Northwind Labs", "Globex"]
+  max_cost_usd: 0.25
+tags: [task_success, renewals, multi_step, sql, email]

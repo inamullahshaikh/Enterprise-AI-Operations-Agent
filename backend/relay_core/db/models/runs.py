@@ -4,8 +4,14 @@
 tool executor exist to populate them (`relay_core.agent.nodes.load_context`,
 `relay_core.tools.executor`). `eval_run_id` is still deferred — the Phase 3 eval harness has
 no `eval_runs` table yet (docs/adr/0009). `status` and `route` only allow the values this
-phase's graph can actually produce; later phases extend the CHECK constraints (approvals add
-`awaiting_approval`/`expired`, budgets add `budget_exceeded`, cancellation adds `cancelled`).
+phase's graph can actually produce; later phases extend the CHECK constraints (Phase 5's
+approvals added `awaiting_approval`/`expired`, budgets add `budget_exceeded`, cancellation adds
+`cancelled`).
+
+`awaiting_approval` means the graph hit `interrupt()` in `approval_gate` and the worker exited —
+the run is parked on a checkpoint until someone decides, and `expired` is where the watchdog
+(`relay_worker.tasks.maintenance`) leaves it if nobody does within
+`Approval.DEFAULT_EXPIRY_HOURS`.
 """
 
 import uuid
@@ -59,7 +65,8 @@ class AgentRun(Base, WorkspaceScoped):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('queued','running','awaiting_input','completed','failed')",
+            "status IN ('queued','running','awaiting_approval','awaiting_input',"
+            "'completed','failed','expired')",
             name="ck_agent_runs_status",
         ),
         CheckConstraint("route IN ('direct','task','blocked')", name="ck_agent_runs_route"),

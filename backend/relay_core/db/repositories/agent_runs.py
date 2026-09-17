@@ -32,7 +32,9 @@ class AgentRunRepository(WorkspaceScopedRepository[AgentRun]):
     async def mark_running(self, workspace_id: uuid.UUID, id_: uuid.UUID) -> AgentRun:
         run = await self._require(workspace_id, id_)
         run.status = "running"
-        run.started_at = datetime.now(UTC)
+        # Also the path back from `awaiting_approval`, so `started_at` keeps the original start
+        # rather than being reset to whenever the approver got around to deciding.
+        run.started_at = run.started_at or datetime.now(UTC)
         return run
 
     async def mark_completed(
@@ -76,6 +78,22 @@ class AgentRunRepository(WorkspaceScopedRepository[AgentRun]):
         run.tool_calls = tool_calls
         run.capability_snapshot = capability_snapshot
         self._apply_usage(run, usage)
+        run.finished_at = datetime.now(UTC)
+        return run
+
+    async def mark_awaiting_approval(self, workspace_id: uuid.UUID, id_: uuid.UUID) -> AgentRun:
+        """Parked on a checkpoint at `approval_gate`'s `interrupt()`, not finished — so
+        `finished_at` and the usage totals are deliberately left alone: the same run carries on
+        accumulating them once it resumes (docs/system-design.md section 13.2)."""
+        run = await self._require(workspace_id, id_)
+        run.status = "awaiting_approval"
+        return run
+
+    async def mark_expired(self, workspace_id: uuid.UUID, id_: uuid.UUID) -> AgentRun:
+        """Nobody decided within the approval's window (section 13.4), so the run can never be
+        resumed — this is terminal, unlike `awaiting_approval`."""
+        run = await self._require(workspace_id, id_)
+        run.status = "expired"
         run.finished_at = datetime.now(UTC)
         return run
 

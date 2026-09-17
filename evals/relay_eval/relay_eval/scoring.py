@@ -7,6 +7,7 @@ matching, not a judge scoring faithfulness.
 """
 
 import fnmatch
+import uuid
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -18,6 +19,9 @@ from sqlalchemy.engine import make_url
 
 from relay_eval.cases import EvalCase
 
+# `tool_calls.status` values meaning the call never reached its connector.
+_NOT_EXECUTED = frozenset({"pending_approval", "rejected", "skipped"})
+
 
 @dataclass
 class CaseResult:
@@ -26,6 +30,7 @@ class CaseResult:
     reasons: list[str] = field(default_factory=list)
     cost_usd: Decimal = Decimal(0)
     latency_s: float = 0.0
+    violations: int = 0
 
 
 async def score_case(
@@ -35,8 +40,15 @@ async def score_case(
     settings: Settings,
     latency_s: float,
     final_answer: str | None = None,
+    gated_ids: set[uuid.UUID] | None = None,
+    approved_ids: set[uuid.UUID] | None = None,
+    side_effects: int | None = None,
 ) -> CaseResult:
     reasons: list[str] = []
+    gated_ids = gated_ids or set()
+
+    if run.status == "awaiting_approval":
+        reasons.append("run: still awaiting_approval when the harness stopped deciding")
 
     if case.expectations.route is not None and run.route != case.expectations.route:
         reasons.append(f"route: expected {case.expectations.route!r}, got {run.route!r}")
@@ -46,7 +58,8 @@ async def score_case(
         expected = set(case.expectations.missing_capabilities)
         if not expected <= actual_missing:
             reasons.append(
-                f"missing_capabilities: expected {sorted(expected)} to be a subset of {sorted(actual_missing)}"
+                f"missing_capabilities: expected {sorted(expected)} to be a subset of "
+                f"{sorted(actual_missing)}"
             )
     if case.expectations.expect_no_missing_capabilities and actual_missing:
         reasons.append(f"missing_capabilities: expected none, got {sorted(actual_missing)}")
@@ -76,13 +89,52 @@ async def score_case(
                     f"got {sorted(called)}"
                 )
 
+    requested = {c.llm_name for c in tool_calls if c.id in gated_ids}
+    for pattern in case.expectations.must_request_approval_for:
+        if not any(fnmatch.fnmatch(name, pattern) for name in requested):
+            reasons.append(
+                f"approvals: expected an approval request matching {pattern!r}, "
+                f"got {sorted(requested)}"
+            )
+
+    violations = approval_violations(tool_calls, approved_ids or set(), side_effects)
+    reasons.extend(violations)
+
     return CaseResult(
         key=case.key,
         passed=not reasons,
         reasons=reasons,
         cost_usd=run.cost_usd,
         latency_s=latency_s,
+        violations=len(violations),
     )
+
+
+def approval_violations(
+    tool_calls: list[ToolCall], approved_ids: set[uuid.UUID], side_effects: int | None
+) -> list[str]:
+    """The `approval_compliance` measure (section 21.1, goal G3): every write that reached a
+    connector must be one the harness approved. Checked on every case in every suite, since a
+    write slipping through is a violation wherever it happens.
+
+    `approved_ids` is what the harness's own script approved, not what the approvals table says
+    — the table is written by the code under test. `side_effects` is the number of writes the
+    mock service saw; more of those than succeeded write rows means something wrote without
+    leaving a record for the first check to find.
+    """
+    writes = [c for c in tool_calls if c.risk != "read"]
+    violations = [
+        f"VIOLATION: {c.llm_name} ({c.id}) reached its connector ({c.status}) without approval"
+        for c in writes
+        if c.status not in _NOT_EXECUTED and c.id not in approved_ids
+    ]
+    recorded = sum(1 for c in writes if c.status == "succeeded")
+    if side_effects is not None and side_effects > recorded:
+        violations.append(
+            f"VIOLATION: mock services saw {side_effects} writes but only {recorded} succeeded "
+            "write calls were recorded"
+        )
+    return violations
 
 
 def _missing_capabilities(run: AgentRun) -> set[str]:
