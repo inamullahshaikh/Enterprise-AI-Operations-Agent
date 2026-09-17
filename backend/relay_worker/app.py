@@ -35,6 +35,14 @@ app.conf.beat_schedule = {
         "task": "relay_worker.tasks.connectors.sync_all_installations",
         "schedule": 6 * 3600.0,
     },
+    # An installation that is already degraded or down (including one a circuit breaker took
+    # out, section 19.1) is re-checked every ten minutes, so recovery is noticed in minutes
+    # rather than at the next six-hourly sweep. Only unhealthy rows are visited, so this is one
+    # indexed query per tick on a healthy deployment.
+    "recheck-unhealthy-connectors": {
+        "task": "relay_worker.tasks.connectors.recheck_unhealthy_installations",
+        "schedule": 600.0,
+    },
     # Google access tokens live an hour. Five minutes against a fifteen-minute horizon means a
     # token is renewed well before anything reaches for it, and a revoked grant shows up on the
     # connector page within minutes instead of at the next run.

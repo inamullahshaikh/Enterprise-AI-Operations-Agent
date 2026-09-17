@@ -1,0 +1,16 @@
+# Setup half of the memory case (Phase 7 D1/D2). Its only job is to state a preference durable
+# enough for extraction to keep; what it answers barely matters. The preference is about how
+# Relay *replies*, not about an email body, so the half that is measured can check the final
+# answer directly instead of digging through tool arguments.
+key: task_success_memory_states_preference
+suite: task_success
+connector_profile: full
+message: >
+  A standing preference, for every answer you ever give me: finish with a final line that starts
+  "Next step:" and names one concrete thing I should do. Remember that. Now, which subscriptions
+  end this month?
+expectations:
+  route: task
+  must_call_tools: ["*__run_sql"]
+  max_cost_usd: 0.25
+tags: [task_success, memory, setup]

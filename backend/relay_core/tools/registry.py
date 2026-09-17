@@ -10,6 +10,11 @@ binds when its installation wins at least one requested capability it provides.
 The always-available connectors (`file_upload`, `documents`, `python_sandbox`) have no
 installation and no rows, so they still bind live from `list_tools`.
 
+**Circuit breakers** (section 19.1). An installation whose breaker is open does not bind, and
+the capability it was winning falls to the next installation by priority — the same filter the
+resolver applies, so the capabilities the planner was told about and the tools the executor gets
+never disagree.
+
 **Retrieval** (section 6.7 step 4). When more installed tools qualify than `limit` and a `query`
 is given, only the `limit` nearest by embedding are bound, so one executor call sees a focused
 tool set. Always-available tools don't count toward the limit. `approval_gate` passes no query,
@@ -24,8 +29,10 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from relay_core.capabilities.resolver import drop_tripped
 from relay_core.config import Settings
 from relay_core.connectors.base import Connector, ExecutionContext, Risk, ToolSpec
+from relay_core.connectors.breaker import CircuitBreaker
 from relay_core.connectors.builtin.documents import DocumentsConnector
 from relay_core.connectors.builtin.file_upload import FileUploadConnector
 from relay_core.connectors.builtin.python_sandbox import PythonSandboxConnector
@@ -92,12 +99,14 @@ class ToolRegistry:
         kms: LocalKMS,
         gateway: LLMGateway,
         settings: Settings,
+        breaker: CircuitBreaker | None = None,
     ) -> None:
         self.session = session
         self.object_store = object_store
         self.kms = kms
         self.gateway = gateway
         self.settings = settings
+        self.breaker = breaker
         self.tool_definitions = ToolDefinitionRepository(session)
         self.credentials = ConnectorCredentialRepository(session)
         self.attachments = AttachmentRepository(session)
@@ -168,8 +177,12 @@ class ToolRegistry:
             await self._bind(sandbox_connector, "python_sandbox", None, sandbox_ctx, requested)
         )
 
-        rows = await self.tool_definitions.list_bindable(workspace_id, requested)
+        rows = await drop_tripped(
+            await self.tool_definitions.list_bindable(workspace_id, requested), self.breaker
+        )
         # Rows arrive best priority first, so the first installation seen per capability wins.
+        # Tripped installations are already gone, so a capability they were winning falls
+        # through to whoever is next rather than binding nothing.
         winners: dict[str, uuid.UUID] = {}
         for row, installation in rows:
             for capability in requested.intersection(row.capabilities):

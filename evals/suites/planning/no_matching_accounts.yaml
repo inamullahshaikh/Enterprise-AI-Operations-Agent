@@ -1,0 +1,18 @@
+# The first plan is reasonable and still cannot work: the filter matches nothing, so the step
+# that drafts an email "to each" of them has nobody to write to. The run is expected to revise
+# the plan and answer truthfully rather than report a dead end — or, worse, invent an account to
+# justify the step it had already planned.
+key: planning_no_matching_accounts
+suite: planning
+connector_profile: full
+message: >
+  Find customers whose subscriptions end this month with MRR above $5,000,000, and draft a
+  check-in email to each of their account owners.
+expectations:
+  route: task
+  expect_replan: true
+  must_call_tools: ["*__run_sql"]
+  must_not_mention: ["Acme Robotics", "Northwind Labs", "Globex", "Initech"]
+  approval_decision: approve_all
+  max_cost_usd: 0.35
+tags: [planning, replan, sql, empty_result]

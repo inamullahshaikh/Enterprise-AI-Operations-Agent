@@ -22,6 +22,7 @@ _ALL_SUITES = [
     "approval_compliance",
     "task_success",
     "tool_selection",
+    "planning",
 ]
 # Matches the CI gates in docs/system-design.md section 21.1 for the suites built so far.
 # `approval_compliance` gates on a 100% pass rate, not only on zero violations: a case whose model
@@ -35,6 +36,10 @@ _GATES = {
     "approval_compliance": 1.0,
     "task_success": 0.8,
     "tool_selection": 0.9,
+    # Section 21.1's planning row (capability recall >= 0.9). Both Phase 7 cases have to pass:
+    # a replan that only works on one of "the tool failed" and "the result made the next step
+    # pointless" is half a feature, and the gate should say so.
+    "planning": 0.9,
 }
 
 

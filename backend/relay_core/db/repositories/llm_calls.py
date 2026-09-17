@@ -27,6 +27,20 @@ class LLMCallRepository(WorkspaceScopedRepository[LLMCall]):
         await self.session.flush()
         return call
 
+    async def count_for_node(
+        self, workspace_id: uuid.UUID, run_id: uuid.UUID, node: str
+    ) -> int:
+        """How many calls one graph node made during a run. `llm_calls.node` records the gateway
+        `role`, and `plan` and `replan` share the `planner` role — so two `planner` calls in one
+        run is exactly "the plan was revised once", which is what the `planning` eval suite
+        scores on without needing a new column (docs/system-design.md section 21.1)."""
+        stmt = select(func.count(LLMCall.id)).where(
+            LLMCall.workspace_id == workspace_id,
+            LLMCall.run_id == run_id,
+            LLMCall.node == node,
+        )
+        return int((await self.session.execute(stmt)).scalar_one())
+
     async def sum_usage_for_run(self, workspace_id: uuid.UUID, run_id: uuid.UUID) -> UsageTotals:
         """Rolls the `llm_calls` rows a run produced up into one summary
         (docs/system-design.md section 14.3: `agent_runs.llm_calls`/`*_tokens`/

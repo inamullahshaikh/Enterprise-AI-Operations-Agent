@@ -15,6 +15,11 @@ are reset before each such case, so their write counts belong to that case alone
 
 A case message may contain `{mock_services_url}`, for a page URL that differs between Docker and
 CI.
+
+**Memory extraction runs inline** (Phase 7 F1). In production `finalize` puts it on the `memory`
+queue once the run's transaction commits; here there is no Celery worker, and a memory case's
+second run is scored on what the first one remembered. So the harness passes its own dispatcher
+that does the extraction in a fresh session before the next case starts.
 """
 
 import time
@@ -33,10 +38,13 @@ from relay_core.config import Settings, get_settings
 from relay_core.db.models.approvals import Approval
 from relay_core.db.repositories.agent_runs import AgentRunRepository
 from relay_core.db.repositories.approvals import ApprovalRepository
+from relay_core.db.repositories.llm_calls import LLMCallRepository
+from relay_core.llm.gateway import build_llm_gateway
 from relay_core.db.repositories.messages import MessageRepository
 from relay_core.db.repositories.tool_calls import ToolCallRepository
 from relay_core.db.repositories.users import UserRepository
 from relay_core.db.repositories.workspaces import WorkspaceMemberRepository
+from relay_core.memory.extract import extract_memories
 from relay_core.security.crypto import LocalKMS, build_kms
 from relay_core.storage.object_store import ObjectStore, build_object_store
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -169,6 +177,7 @@ async def run_case(
             redis=redis,
             settings=settings,
             checkpointer=checkpointer,
+            extract_memories=_inline_extractor(sessionmaker, redis, settings),
         )
         await session.commit()
     gated_ids, approved_ids = await _decide_until_done(
@@ -197,6 +206,9 @@ async def run_case(
                 workspace_id, agent_run.final_message_id
             )
             final_answer = final_message.content if final_message is not None else None
+        planner_calls = await LLMCallRepository(session).count_for_node(
+            workspace_id, run.id, "planner"
+        )
         return await score_case(
             case,
             agent_run,
@@ -207,7 +219,34 @@ async def run_case(
             gated_ids=gated_ids,
             approved_ids=approved_ids,
             side_effects=side_effects,
+            planner_calls=planner_calls,
         )
+
+
+def _inline_extractor(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    redis: Redis,
+    settings: Settings,
+):
+    """Stands in for the `memory` queue (see the module docstring). Its own session, so it reads
+    the committed run rather than the one `finalize` is still inside, and its own failure
+    handling, because a broken extraction should cost a memory, not a case."""
+
+    async def _extract(workspace_id: uuid.UUID, run_id: uuid.UUID) -> None:
+        async with sessionmaker() as session:
+            try:
+                await extract_memories(
+                    workspace_id=workspace_id,
+                    run_id=run_id,
+                    session=session,
+                    gateway=build_llm_gateway(session, redis, settings),
+                    settings=settings,
+                )
+                await session.commit()
+            except Exception:  # noqa: BLE001 - the answer already stands
+                await session.rollback()
+
+    return _extract
 
 
 async def _decide_until_done(

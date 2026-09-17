@@ -1,0 +1,17 @@
+# A step whose tool fails: the page does not exist on the mock service, so `fetch_url` returns an
+# error rather than content. The run is expected to replan onto a source it does have, and to say
+# plainly that the page could not be read — not to summarize a page it never saw.
+key: planning_unreachable_source
+suite: planning
+connector_profile: full
+message: >
+  Summarize the renewal policy published at {mock_services_url}/pages/renewal-policy-v9 for me.
+  If that page cannot be read, tell me what our database says about subscriptions ending this
+  month instead.
+expectations:
+  route: task
+  expect_replan: true
+  must_call_tools: ["*__run_sql"]
+  approval_decision: approve_all
+  max_cost_usd: 0.35
+tags: [planning, replan, web_search, tool_failure]

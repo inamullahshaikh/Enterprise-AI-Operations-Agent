@@ -27,9 +27,11 @@ from relay_core.agent.deps import AgentDeps, MemoryDispatcher
 from relay_core.agent.graph import compile_graph
 from relay_core.agent.state import AgentState
 from relay_core.config import Settings
+from relay_core.connectors.breaker import CircuitBreaker
 from relay_core.db.repositories.agent_runs import AgentRunRepository
 from relay_core.db.repositories.approvals import ApprovalRepository
 from relay_core.db.repositories.attachments import AttachmentRepository
+from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.db.repositories.conversations import ConversationRepository
 from relay_core.db.repositories.documents import DocumentRepository
 from relay_core.db.repositories.llm_calls import LLMCallRepository
@@ -92,8 +94,15 @@ def build_agent_deps(
     resolved_gateway = gateway or build_llm_gateway(session, redis, settings)
     tool_calls = ToolCallRepository(session)
     events = EventPublisher(redis)
+    breaker = CircuitBreaker(redis)
+    installations = ConnectorInstallationRepository(session)
     tool_registry = ToolRegistry(
-        session, object_store or build_object_store(settings), kms, resolved_gateway, settings
+        session,
+        object_store or build_object_store(settings),
+        kms,
+        resolved_gateway,
+        settings,
+        breaker=breaker,
     )
     return AgentDeps(
         gateway=resolved_gateway,
@@ -108,11 +117,12 @@ def build_agent_deps(
         attachments=AttachmentRepository(session),
         documents=DocumentRepository(session),
         tool_registry=tool_registry,
-        tool_executor=ToolExecutor(tool_calls, events),
+        tool_executor=ToolExecutor(tool_calls, events, breaker, installations),
         approvals=ApprovalRepository(session),
         policies=WorkspacePolicyRepository(session),
         members=WorkspaceMemberRepository(session),
         memories=MemoryRepository(session),
+        breaker=breaker,
         extract_memories=extract_memories or after_commit_dispatcher(session),
     )
 

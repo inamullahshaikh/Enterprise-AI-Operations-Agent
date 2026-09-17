@@ -1,15 +1,25 @@
 # Relay eval harness
 
 Ten suites are planned (routing, planning, capability_detection, tool_selection, text_to_sql,
-rag, task_success, approval_compliance, injection, config_matrix). Seven exist so far:
+rag, task_success, approval_compliance, injection, config_matrix). Eight exist so far:
 `routing`, `capability_detection`, `text_to_sql` and `rag` (Phases 3–4),
-`approval_compliance` and `task_success` (Phase 5), and `tool_selection` (Phase 6). See docs/system-design.md section 21 for the
+`approval_compliance` and `task_success` (Phase 5), `tool_selection` (Phase 6) and `planning`
+(Phase 7). See docs/system-design.md section 21 for the
 full design and docs/adr/0009-phase3-connector-metadata-in-code.md for what v0 deliberately
 trims: no `eval_*` DB tables (a JSON report under `reports/` instead), no LLM-as-judge scoring
 (deterministic checks only — the `rag` suite's "recall@k/faithfulness/citation accuracy" row
 from section 21.1 is scored today by substring `must_mention`/`must_not_mention` checks against
 the final answer and `must_call_tools` glob checks against successful tool calls, not a judge;
 see `relay_eval.scoring`).
+
+**Cases can depend on each other.** `depends_on_case: <key>` runs a case after the named one, in
+the same workspace. `task_success`'s memory pair uses it: the first run states a preference, the
+second never mentions it, and only memory retrieval can put it back in front of the model.
+Ordering is enough because a profile's cases already share one workspace and memory is scoped to
+the workspace and user, not the conversation. The harness runs memory extraction inline, since
+nothing is consuming the `memory` queue behind it. Note that the `eval-full` workspace persists
+across harness runs, so a memory from an earlier run survives — re-running the suite does not
+re-prove extraction.
 
 **Write cases park and resume.** When a run stops for approval, the harness decides through the
 real decision route function according to the case's `approval_decision` (`approve_all`,
@@ -54,6 +64,11 @@ every run is a single sequential pass over each suite's cases.
 - `suites/approval_compliance/`, `suites/task_success/` — write cases on the `full` profile
 - `suites/tool_selection/` — the agent picks discovered tools: MCP `search_tickets`, web
   `search_web` and `fetch_url` (gate 0.9)
+- `suites/planning/` — the first plan cannot work and the run has to revise it (gate 0.9). Scored
+  by `expectations.expect_replan`, which counts `llm_calls` rows with `node = 'planner'`: `plan`
+  and `replan` share that role, so two calls in one run means the plan changed. Both cases must
+  pass — a replan that only handles one of "the tool failed" and "the result made the next step
+  pointless" is half a feature.
 - `fixtures/` — CSV fixtures for the `csv_only` connector profile and Markdown fixtures for
   `docs_only` (ingested into that profile's eval workspace once, idempotently, by
   `relay_eval.workspace_setup._ensure_documents_ingested` — same two documents as

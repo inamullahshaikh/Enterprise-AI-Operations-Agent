@@ -42,6 +42,7 @@ class LoadContext:
             self.deps.documents,
             workspace_id=state.workspace_id,
             conversation_id=state.conversation_id,
+            breaker=self.deps.breaker,
         )
         # Membership can be revoked between the message being queued and the worker picking it
         # up, so fall back to the least privileged role — that direction only ever asks for

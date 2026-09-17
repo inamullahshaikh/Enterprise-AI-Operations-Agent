@@ -61,6 +61,21 @@ class ConnectorInstallationRepository(WorkspaceScopedRepository[ConnectorInstall
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
+    async def list_unhealthy_across_workspaces(self) -> list[ConnectorInstallation]:
+        """**Cross-tenant**, like `list_active_across_workspaces` above. Feeds the short recovery
+        beat (`relay_worker.tasks.connectors.recheck_unhealthy_installations`): an installation
+        that went `degraded` or `down` — because it broke, or because its circuit breaker opened
+        — should be noticed as recovered within minutes, not at the next six-hourly sweep."""
+        stmt = (
+            select(ConnectorInstallation)
+            .where(
+                ConnectorInstallation.status == "active",
+                ConnectorInstallation.health.in_(("degraded", "down")),
+            )
+            .order_by(ConnectorInstallation.created_at)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def set_health(
         self,
         workspace_id: uuid.UUID,

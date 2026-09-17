@@ -1,0 +1,15 @@
+# The measured half: a second run, in a new conversation, that never restates the preference.
+# Only `load_context`'s memory retrieval can put it in front of the model, so an answer that ends
+# with the "Next step:" line is proof the memory survived the conversation boundary and changed
+# the work. `depends_on_case` is what guarantees the setup run happened first.
+key: task_success_memory_honours_preference
+suite: task_success
+connector_profile: full
+depends_on_case: task_success_memory_states_preference
+message: "How many customers do we have on the Enterprise plan?"
+expectations:
+  route: task
+  must_call_tools: ["*__run_sql"]
+  must_mention: ["Next step:"]
+  max_cost_usd: 0.25
+tags: [task_success, memory, retrieval]

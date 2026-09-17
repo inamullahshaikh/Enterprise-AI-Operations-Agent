@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from relay_core.config import Settings
+from relay_core.connectors.breaker import CircuitBreaker
 from relay_core.db.repositories.agent_runs import AgentRunRepository
 from relay_core.db.repositories.approvals import ApprovalRepository
 from relay_core.db.repositories.attachments import AttachmentRepository
@@ -53,3 +54,4 @@ class AgentDeps:
     members: WorkspaceMemberRepository
     memories: MemoryRepository
     extract_memories: MemoryDispatcher
+    breaker: CircuitBreaker | None = None

@@ -60,6 +60,26 @@ guarded `fetch_url`) and a sample MCP ticketing server in `mcp_examples/`. See
 and [docs/phase-6-status.md](docs/phase-6-status.md). An existing dev database needs
 `make sync-tools` once after upgrading.
 
+**Phase 7** (real integrations, memory, replanning): `gmail` and `google_calendar` now speak the
+real Gmail and Calendar REST APIs, and the mock service answers those same endpoints — so
+pointing an installation at the mock is a `base_url` difference, not a second code path. An admin
+connects a real Google account through `/connectors/{id}/oauth/start`; tokens live in the existing
+encrypted blob and are refreshed both lazily and on a five-minute sweep, with a revoked grant
+marking the installation degraded instead of failing someone's run. The agent now **remembers**:
+durable preferences and facts are extracted from completed runs on the `memory` queue, retrieved
+by embedding in `load_context`, injected as background (never as instructions, and never as
+authorization), and managed through `/memories`. Long conversations get a rolling summary. A step
+the validator judges unworkable goes to a new `replan` node rather than ending the run, bounded at
+two revisions with completed steps preserved in code. A new `validate_final` node checks the draft
+answer against what the steps actually produced before a single token reaches the user — which is
+why `synthesize` buffers instead of streaming. A per-installation circuit breaker takes a
+repeatedly failing connector out of binding so the capability falls to the next installation by
+priority. The `planning` eval suite measures the replan path, and `task_success` gained
+groundedness and memory cases. See
+[docs/adr/0013-real-oauth-memory-and-replanning.md](docs/adr/0013-real-oauth-memory-and-replanning.md)
+and [docs/phase-7-status.md](docs/phase-7-status.md). Connecting Google needs an OAuth client with
+`{API_BASE_URL}/api/v1/oauth/callback` registered as a redirect URI.
+
 Phase numbers here follow the design doc. The commit history runs one behind: the commit titled
 "Phase 3 completed" holds both Phase 3 and Phase 4.
 

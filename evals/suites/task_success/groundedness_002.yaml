@@ -1,0 +1,17 @@
+# The groundedness half of Phase 7 C2 (`validate_final`), as a measured case rather than only a
+# unit test: the answer may state numbers the seeded data contains and must not state the
+# plausible-looking ones it does not. $12,500 and 47% are the shapes a model reaches for when it
+# is filling a sentence rather than reading a result.
+key: task_success_groundedness_002
+suite: task_success
+connector_profile: full
+message: >
+  What is the total MRR of the customers whose subscriptions end this month? Give me the figure
+  and name the accounts it comes from.
+expectations:
+  route: task
+  must_call_tools: ["*__run_sql"]
+  must_mention: ["Acme Robotics"]
+  must_not_mention: ["$12,500", "47%", "approximately", "roughly"]
+  max_cost_usd: 0.25
+tags: [task_success, groundedness, sql, validate_final]

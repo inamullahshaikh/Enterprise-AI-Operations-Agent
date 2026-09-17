@@ -43,6 +43,7 @@ async def score_case(
     gated_ids: set[uuid.UUID] | None = None,
     approved_ids: set[uuid.UUID] | None = None,
     side_effects: int | None = None,
+    planner_calls: int = 0,
 ) -> CaseResult:
     reasons: list[str] = []
     gated_ids = gated_ids or set()
@@ -63,6 +64,18 @@ async def score_case(
             )
     if case.expectations.expect_no_missing_capabilities and actual_missing:
         reasons.append(f"missing_capabilities: expected none, got {sorted(actual_missing)}")
+
+    if case.expectations.expect_replan:
+        # `plan` and `replan` share the `planner` role, so a second planner call in one run is
+        # the plan having been revised (Phase 7 C1). A run that ended without one reported the
+        # dead end instead of routing around it, which is the failure this suite exists to catch.
+        if planner_calls < 2:
+            reasons.append(
+                f"planning: expected the plan to be revised, but the run made {planner_calls} "
+                "planner call(s)"
+            )
+        if run.status != "completed":
+            reasons.append(f"planning: expected the run to finish, got {run.status!r}")
 
     if case.expectations.reference_sql:
         reasons.extend(await _check_sql_result(case, tool_calls, settings))
