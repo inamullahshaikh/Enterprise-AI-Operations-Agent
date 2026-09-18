@@ -36,11 +36,12 @@ class Plan(BaseModel):
 
 
 class Budget(BaseModel):
-    """Bounds `execute_step`'s tool-calling loop across the whole run (section 8.3). Only
-    `max_tool_calls`/`used_tool_calls` are enforced this phase (`relay_core.agent.nodes.
-    execute_step.enforce_budget`) — the rest of the shape matches the design now so a later
-    phase's real per-workspace budgets (section 19, `workspace_policies.run_budget`) slot into
-    the same field names instead of renaming a checkpointed state shape.
+    """Per-run limits (sections 8.3, 19.2), loaded from `workspace_policies.run_budget` by
+    `load_context` and enforced by `relay_core.agent.nodes.execute_step.enforce_budget`.
+    `used_llm_calls`/`used_cost_usd` are refreshed from `llm_calls` before each check, so every
+    node's spend counts without each node reporting it. `clock_started_at` is `time.monotonic()`
+    in the worker process currently running the graph: `load_context` sets it and `approval_gate`
+    resets it on resume, so time parked waiting for a human is not the run's spend.
     """
 
     max_steps: int = 10
@@ -51,6 +52,7 @@ class Budget(BaseModel):
     used_tool_calls: int = 0
     used_llm_calls: int = 0
     used_cost_usd: float = 0.0
+    clock_started_at: float | None = None
 
 
 class AgentState(BaseModel):
@@ -104,6 +106,20 @@ class AgentState(BaseModel):
     # stops a run rediscovering the same dead end forever.
     replan_reason: str | None = None
     replans_used: int = 0
+
+    # Set by `execute_step` when the run budget ran out (section 19.2). `next_step` skips what is
+    # left and `synthesize` is told to say the answer is partial.
+    budget_exhausted: str | None = None
+
+    # The first untrusted source this run read from (section 18.4 step 5), or None. Once set,
+    # every write needs approval. A string rather than a flag so the approval card can say why.
+    touched_untrusted: str | None = None
+
+    # `workspace_policies.pii_redaction`, snapshotted by `load_context`, and the placeholder ->
+    # real value mapping `relay_core.security.pii` builds as tool output is redacted. Whole-object
+    # replace: every node that extends it returns the full dict.
+    pii_redaction: bool = False
+    pii_map: dict[str, str] = Field(default_factory=dict)
 
     # final groundedness check (relay_core.agent.nodes.validate_final). `draft_chunks` holds the
     # streamed pieces of a draft that has not been validated yet — they are published only once

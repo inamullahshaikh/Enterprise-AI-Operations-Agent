@@ -4,6 +4,11 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Nightly eval pass (Phase 8 D4): every case three times, reporting pass@1 and pass^3. Only the
+  # eval-harness job changes behaviour on a schedule; see its last steps.
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 jobs:
   lint-backend:
@@ -184,7 +189,18 @@ jobs:
           print("LOCAL_MASTER_KEY=base64:" + base64.b64encode(os.urandom(32)).decode())
           PY
       - name: relay-eval run --all --ci
+        if: github.event_name != 'schedule'
         run: relay-eval run --all --ci
+      - name: relay-eval nightly (repeats, not blocking)
+        # pass^3 is reported, not gated, until there is history to set a threshold from.
+        if: github.event_name == 'schedule'
+        run: relay-eval run --all --repeats 3 --concurrency 4
+      - name: Upload eval reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-reports-${{ github.run_id }}
+          path: evals/reports/
 
   security:
     runs-on: ubuntu-latest

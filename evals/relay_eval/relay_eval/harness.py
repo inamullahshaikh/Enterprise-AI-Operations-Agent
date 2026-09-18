@@ -22,6 +22,7 @@ second run is scored on what the first one remembered. So the harness passes its
 that does the extraction in a fresh session before the next case starts.
 """
 
+import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 from langgraph.checkpoint.memory import MemorySaver
 from redis.asyncio import Redis
 from relay_api.deps import CurrentUser
@@ -50,6 +52,7 @@ from relay_core.storage.object_store import ObjectStore, build_object_store
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from relay_eval.cases import EvalCase, load_suite
+from relay_eval.judge import build_judge
 from relay_eval.scoring import CaseResult, score_case
 from relay_eval.workspace_setup import (
     attach_csv_fixture,
@@ -65,6 +68,10 @@ _MAX_APPROVAL_ROUNDS = 10
 
 @dataclass
 class SuiteReport:
+    """`results` holds every attempt (a case run `--repeats` times appears that many times).
+    `pass_rate` is over attempts, which at `--repeats 1` is the per-case pass rate the gates
+    have always used. `pass_at_1`/`pass_hat_n` are the section 21.4 per-case numbers."""
+
     suite: str
     results: list[CaseResult] = field(default_factory=list)
 
@@ -80,8 +87,44 @@ class SuiteReport:
     def violations(self) -> int:
         return sum(r.violations for r in self.results)
 
+    def by_case(self) -> dict[str, list[CaseResult]]:
+        grouped: dict[str, list[CaseResult]] = {}
+        for r in self.results:
+            grouped.setdefault(r.key, []).append(r)
+        return grouped
 
-async def run_suite(suite: str, settings: Settings | None = None) -> SuiteReport:
+    def pass_at_1(self) -> dict[str, float]:
+        """Per case: 1.0 if any attempt passed."""
+        return {k: float(any(r.passed for r in rs)) for k, rs in self.by_case().items()}
+
+    def pass_hat_n(self) -> dict[str, float]:
+        """Per case: 1.0 only if every attempt passed (pass^n)."""
+        return {k: float(all(r.passed for r in rs)) for k, rs in self.by_case().items()}
+
+    def profile_pass_rates(self) -> dict[str, float]:
+        grouped: dict[str, list[bool]] = {}
+        for r in self.results:
+            grouped.setdefault(r.profile, []).append(r.passed)
+        return {p: sum(v) / len(v) for p, v in grouped.items()}
+
+
+def effective_concurrency(cases: list[EvalCase], requested: int) -> int:
+    """Cases in a suite share their profile's workspace. A `depends_on_case` pair must run in
+    order, and a `full` case resets and counts the shared mock services, so either one makes the
+    suite sequential whatever `--concurrency` says."""
+    if any(c.depends_on_case or c.connector_profile == "full" for c in cases):
+        return 1
+    return max(1, requested)
+
+
+async def run_suite(
+    suite: str,
+    settings: Settings | None = None,
+    *,
+    repeats: int = 1,
+    concurrency: int = 1,
+    fabrication_gate: bool = False,
+) -> SuiteReport:
     settings = settings or get_settings()
     cases = load_suite(_EVALS_ROOT / "suites", suite)
     report = SuiteReport(suite=suite)
@@ -100,9 +143,14 @@ async def run_suite(suite: str, settings: Settings | None = None) -> SuiteReport
             user_id = await ensure_eval_user(session)
             await session.commit()
 
-        for case in cases:
-            report.results.append(
-                await run_case(
+        # Repeats run as whole passes over the suite, so a dependent pair stays in order within
+        # each pass.
+        width = effective_concurrency(cases, concurrency)
+        semaphore = asyncio.Semaphore(width)
+
+        async def _one(case: EvalCase) -> CaseResult:
+            async with semaphore:
+                return await run_case(
                     case,
                     sessionmaker=sessionmaker,
                     redis=redis,
@@ -111,8 +159,15 @@ async def run_suite(suite: str, settings: Settings | None = None) -> SuiteReport
                     settings=settings,
                     user_id=user_id,
                     checkpointer=checkpointer,
+                    fabrication_gate=fabrication_gate,
                 )
-            )
+
+        for _ in range(max(1, repeats)):
+            if width == 1:  # sequential: keep file order, dependencies included
+                for case in cases:
+                    report.results.append(await _one(case))
+            else:
+                report.results.extend(await asyncio.gather(*(_one(c) for c in cases)))
     finally:
         await redis.aclose()
         await engine.dispose()
@@ -130,6 +185,7 @@ async def run_case(
     settings: Settings,
     user_id: uuid.UUID,
     checkpointer: MemorySaver,
+    fabrication_gate: bool = False,
 ) -> CaseResult:
     async with sessionmaker() as session:
         workspace_id = await ensure_workspace_for_profile(
@@ -166,6 +222,7 @@ async def run_case(
         for base_url in (settings.mock_services_url, _ticketing_base(settings)):
             async with httpx.AsyncClient(base_url=base_url, timeout=10) as http:
                 (await http.post("/_reset")).raise_for_status()
+        await _inject(case, settings)
         baseline = await _mock_write_count(settings)
 
     started = time.monotonic()
@@ -209,7 +266,13 @@ async def run_case(
         planner_calls = await LLMCallRepository(session).count_for_node(
             workspace_id, run.id, "planner"
         )
-        return await score_case(
+        # Built only for cases that ask for it. No run_id: its spend is the harness's, not the run's.
+        judge = (
+            build_judge(build_llm_gateway(session, redis, settings), settings, workspace_id, None)
+            if case.expectations.fabrication_check
+            else None
+        )
+        result = await score_case(
             case,
             agent_run,
             tool_calls,
@@ -220,7 +283,11 @@ async def run_case(
             approved_ids=approved_ids,
             side_effects=side_effects,
             planner_calls=planner_calls,
+            judge=judge,
+            fabrication_gate=fabrication_gate,
         )
+        await session.commit()  # the judge's llm_calls row
+        return result
 
 
 def _inline_extractor(
@@ -325,6 +392,20 @@ def _scripted_decision(
     if script == "approve_first":
         return DecisionRequest(action="approve", item_ids=ids[:1]), ids[:1]
     return DecisionRequest(action="approve"), ids
+
+
+async def _inject(case: EvalCase, settings: Settings) -> None:
+    """Seeds the case's injection payloads (see `EvalCase.inject`)."""
+    if not case.inject:
+        return
+    payloads = yaml.safe_load((_EVALS_ROOT / "fixtures" / "injection_payloads.yaml").read_text())
+    mock_body = {key: payloads[key] for key in ("email", "page") if key in case.inject}
+    if mock_body:
+        async with httpx.AsyncClient(base_url=settings.mock_services_url, timeout=10) as http:
+            (await http.post("/_inject", json=mock_body)).raise_for_status()
+    if "ticket" in case.inject:
+        async with httpx.AsyncClient(base_url=_ticketing_base(settings), timeout=10) as http:
+            (await http.post("/_inject", json=payloads["ticket"])).raise_for_status()
 
 
 async def _mock_write_count(settings: Settings) -> int:

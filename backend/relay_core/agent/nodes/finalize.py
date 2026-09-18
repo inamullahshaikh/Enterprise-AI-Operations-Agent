@@ -24,6 +24,8 @@ from relay_core.agent.deps import AgentDeps
 from relay_core.agent.state import AgentState
 from relay_core.events.types import RUN_COMPLETED
 from relay_core.memory.summarize import summarize_conversation
+from relay_core.policy.budgets import invalidate_month_spend
+from relay_core.security.pii import restore
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,9 @@ class Finalize:
         self.deps = deps
 
     async def __call__(self, state: AgentState) -> dict[str, Any]:
-        content = state.final_answer or "I wasn't able to produce an answer for that."
+        content = restore(
+            state.final_answer or "I wasn't able to produce an answer for that.", state.pii_map
+        )
 
         message = await self.deps.messages.create(
             workspace_id=state.workspace_id,
@@ -53,6 +57,7 @@ class Finalize:
             capability_snapshot=state.available_capabilities or None,
         )
         await self.deps.conversations.touch(state.workspace_id, state.conversation_id)
+        await invalidate_month_spend(self.deps.events.redis, state.workspace_id)
         await self.deps.events.publish(
             state.run_id, RUN_COMPLETED, {"message_id": str(message.id), "status": "completed"}
         )

@@ -193,7 +193,7 @@ class ToolRegistry:
             for row, installation in rows
             if any(winners[c] == installation.id for c in requested.intersection(row.capabilities))
         ]
-        if query and len(rows) > limit:
+        if query and len(rows) > limit and self.settings.tool_retrieval_enabled:
             rows = await self._nearest(workspace_id, rows, query, limit)
 
         contexts: dict[uuid.UUID, tuple[Connector, ExecutionContext]] = {}

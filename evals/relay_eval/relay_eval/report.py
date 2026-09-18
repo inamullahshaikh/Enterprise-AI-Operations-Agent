@@ -20,7 +20,15 @@ def print_report(report: SuiteReport) -> None:
     for result in report.results:
         status = "PASS" if result.passed else "FAIL"
         detail = f" — {'; '.join(result.reasons)}" if result.reasons else ""
-        print(f"  [{status}] {result.key}{detail}")
+        extra = "; ".join(result.notes + result.unscored)
+        print(f"  [{status}] {result.key}{detail}" + (f" ({extra})" if extra else ""))
+    attempts = {len(rs) for rs in report.by_case().values()}
+    if attempts != {1}:
+        at1, hat = report.pass_at_1(), report.pass_hat_n()
+        print(
+            f"  pass@1 {sum(at1.values()) / len(at1):.0%}, "
+            f"pass^{max(attempts)} {sum(hat.values()) / len(hat):.0%}"
+        )
 
 
 def write_report(report: SuiteReport) -> Path:
@@ -31,11 +39,24 @@ def write_report(report: SuiteReport) -> Path:
         "suite": report.suite,
         "pass_rate": report.pass_rate,
         "violations": report.violations,
+        "cost_usd": str(sum((r.cost_usd for r in report.results), start=0)),
+        "profile_pass_rates": report.profile_pass_rates(),
+        "cases": {
+            key: {
+                "attempts": len(rs),
+                "pass_at_1": report.pass_at_1()[key],
+                "pass_hat_n": report.pass_hat_n()[key],
+            }
+            for key, rs in report.by_case().items()
+        },
         "results": [
             {
                 "key": r.key,
                 "passed": r.passed,
                 "reasons": r.reasons,
+                "notes": r.notes,
+                "unscored": r.unscored,
+                "profile": r.profile,
                 "cost_usd": str(r.cost_usd),
                 "latency_s": r.latency_s,
                 "violations": r.violations,

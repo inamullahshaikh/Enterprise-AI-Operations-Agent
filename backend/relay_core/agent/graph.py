@@ -50,8 +50,14 @@ from relay_core.agent.state import AgentState
 from relay_core.config import Settings
 
 
-def _route_after_execute(state: AgentState) -> Literal["approval_gate", "validate_step"]:
-    return "approval_gate" if state.pending_approval_id is not None else "validate_step"
+def _route_after_execute(
+    state: AgentState,
+) -> Literal["approval_gate", "validate_step", "next_step"]:
+    """A spent budget skips `validate_step`: retrying or replanning the step would only spend
+    more. `next_step` skips the rest and hands over to `synthesize` (section 19.2)."""
+    if state.pending_approval_id is not None:
+        return "approval_gate"
+    return "next_step" if state.budget_exhausted else "validate_step"
 
 
 def _route_after_validate(state: AgentState) -> Literal["execute_step", "next_step", "replan"]:

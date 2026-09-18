@@ -2,6 +2,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import select
+
 from relay_core.db.models.runs import AgentRun
 from relay_core.db.repositories.base import WorkspaceScopedRepository
 from relay_core.db.repositories.llm_calls import UsageTotals
@@ -28,6 +30,22 @@ class AgentRunRepository(WorkspaceScopedRepository[AgentRun]):
         self.session.add(run)
         await self.session.flush()
         return run
+
+    async def active_for_conversation(
+        self, workspace_id: uuid.UUID, conversation_id: uuid.UUID
+    ) -> AgentRun | None:
+        """The run that holds this conversation's lock (section 19.3), if any. A run parked on
+        an approval still holds it; one waiting for the user's answer does not."""
+        stmt = (
+            select(AgentRun)
+            .where(
+                AgentRun.workspace_id == workspace_id,
+                AgentRun.conversation_id == conversation_id,
+                AgentRun.status.in_(("queued", "running", "awaiting_approval")),
+            )
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def mark_running(self, workspace_id: uuid.UUID, id_: uuid.UUID) -> AgentRun:
         run = await self._require(workspace_id, id_)

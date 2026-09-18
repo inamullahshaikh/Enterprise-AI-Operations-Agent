@@ -319,3 +319,31 @@ async def test_ingest_document_raises_for_an_unknown_document(
             gateway=gateway,
             settings=test_settings,
         )
+
+
+async def test_contextual_headers_can_be_embedded_with_each_chunk(
+    client: AsyncClient, db_session: AsyncSession, redis_client: Redis, test_settings
+) -> None:
+    """Experiment 4 (section 21.6): `RAG_EMBED_CONTEXT_HEADERS=true` embeds "Title\n\ntext"."""
+    workspace_id, user_id = await _register_workspace(client, "ingest-headers@example.com")
+    object_store = _FakeObjectStore()
+    document_id = await _make_document(
+        db_session,
+        object_store,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        title="Notes",
+        mime_type="text/plain",
+        raw=b"First paragraph.",
+    )
+    models = _ScriptedModels()
+    on = test_settings.model_copy(update={"rag_embed_context_headers": True})
+    await ingest_document(
+        workspace_id=workspace_id,
+        document_id=document_id,
+        session=db_session,
+        object_store=object_store,
+        gateway=_gateway(db_session, redis_client, on, models),
+        settings=on,
+    )
+    assert models.embed_calls[0] == ["Notes\n\nFirst paragraph."]

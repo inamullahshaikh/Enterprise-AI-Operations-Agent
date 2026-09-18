@@ -17,6 +17,7 @@ config_schema:
     schemas: { type: array, items: { type: string }, default: ["public"] }
     statement_timeout_s: { type: number, default: 10 }
     row_limit: { type: integer, default: 500 }
+    schema_annotations: { type: boolean, default: true }
 secrets_schema:
   type: object
   required: [username, password]

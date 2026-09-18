@@ -1,0 +1,8 @@
+key: config_matrix_top_usage_none
+suite: config_matrix
+connector_profile: none
+message: "Which account had the most active users last month?"
+expectations:
+  route: task
+  missing_capabilities: [usage.read]
+tags: [config_matrix, top_usage]

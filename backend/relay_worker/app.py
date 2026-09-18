@@ -1,13 +1,17 @@
 from celery import Celery  # type: ignore[import-untyped]
 
 from relay_core.config import get_settings
+from relay_core.observability.logging import configure_logging
 
 settings = get_settings()
+configure_logging()
 
 app = Celery("relay_worker", broker=settings.redis_url, backend=settings.redis_url)
 
 app.conf.update(
     task_acks_late=True,
+    # Keep `configure_logging`'s JSON handler instead of Celery's own.
+    worker_hijack_root_logger=False,
     worker_prefetch_multiplier=1,
     task_routes={
         "relay_worker.tasks.agent.*": {"queue": "agent"},
@@ -27,6 +31,16 @@ app.conf.beat_schedule = {
     "expire-stale-approvals": {
         "task": "relay_worker.tasks.maintenance.expire_stale_approvals",
         "schedule": 300.0,
+    },
+    # Section 19.1: a run with no LLM or tool activity for ten minutes is failed as `stalled`.
+    "fail-stalled-runs": {
+        "task": "relay_worker.tasks.maintenance.fail_stalled_runs",
+        "schedule": 300.0,
+    },
+    # Section 14.5, against each workspace's `data_retention_days`.
+    "apply-retention": {
+        "task": "relay_worker.tasks.maintenance.apply_retention",
+        "schedule": 24 * 3600.0,
     },
     # Keeps MCP tool lists fresh and catches a changed tool (section 18.1's rug-pull) within six
     # hours, without anyone pressing "sync". A health check runs first, so an installation that

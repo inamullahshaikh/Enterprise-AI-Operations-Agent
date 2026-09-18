@@ -29,6 +29,7 @@ from relay_core.db.repositories.connector_installations import ConnectorInstalla
 from relay_core.db.repositories.tool_calls import ToolCallRepository
 from relay_core.events.publisher import EventPublisher
 from relay_core.events.types import TOOL_FINISHED, TOOL_STARTED
+from relay_core.security.pii import restore
 from relay_core.tools.registry import BoundTool
 
 logger = logging.getLogger(__name__)
@@ -60,12 +61,16 @@ class ToolExecutor:
         bound: BoundTool,
         args: dict[str, Any],
         tool_call_id: uuid.UUID | None = None,
+        pii_map: dict[str, str] | None = None,
     ) -> ToolResult:
         """`tool_call_id` names an existing `pending_approval` row to execute instead of opening
         a new one — the path `approval_gate` takes for an approved write. It matters beyond
         tidiness: that row is the one carrying the `idempotency_key`, so reusing it is what ties
         a resumed execution to the call a human actually approved (section 13.3).
         """
+        # The model only ever saw placeholders (`relay_core.security.pii`); the connector, the
+        # email allow-list inside it and the `tool_calls` row get the real values.
+        args = restore(args, pii_map or {})
         errors = _validate_args(bound, args)
         if errors:
             return ToolResult(ok=False, error=f"Invalid arguments: {'; '.join(errors)}")
@@ -135,6 +140,8 @@ class ToolExecutor:
         else:
             await self._record_success(bound)
         latency_ms = int((time.monotonic() - started) * 1000)
+        # Lets `execute_step` annotate this row later (the injection verdict, section 18.4).
+        result.meta["tool_call_id"] = str(record.id)
 
         await self.tool_calls.finish(
             workspace_id,

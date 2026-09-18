@@ -25,6 +25,7 @@ from relay_core.agent.state import AgentState
 from relay_core.events.types import TOKEN
 from relay_core.llm.profiles import VALIDATOR
 from relay_core.llm.schemas import parse_structured
+from relay_core.security.pii import restore
 
 # Section 8.2's "revise (max 1)".
 MAX_FINAL_REVISIONS = 1
@@ -98,6 +99,10 @@ class ValidateFinal:
         }
 
     async def _publish(self, state: AgentState) -> dict[str, Any]:
-        for chunk in state.draft_chunks:
+        chunks = state.draft_chunks
+        if state.pii_map:
+            # A placeholder can straddle two chunks, so restore the whole draft at once.
+            chunks = [restore("".join(chunks), state.pii_map)]
+        for chunk in chunks:
             await self.deps.events.publish(state.run_id, TOKEN, {"delta": chunk})
         return {"draft_chunks": [], "unsupported_claims": []}

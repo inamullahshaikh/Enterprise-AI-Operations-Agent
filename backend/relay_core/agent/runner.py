@@ -16,6 +16,7 @@ import logging
 import uuid
 from typing import Any
 
+import structlog
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 from redis.asyncio import Redis
@@ -147,6 +148,7 @@ async def run_agent_once(
         object_store=object_store,
         extract_memories=extract_memories,
     )
+    structlog.contextvars.bind_contextvars(run_id=str(run_id))
     runs = deps.runs
     messages = deps.messages
     events = deps.events
@@ -230,6 +232,7 @@ async def resume_agent_once(
         object_store=object_store,
         extract_memories=extract_memories,
     )
+    structlog.contextvars.bind_contextvars(run_id=str(run_id))
     run = await deps.runs.get(workspace_id, run_id)
     if run is None:
         logger.error(

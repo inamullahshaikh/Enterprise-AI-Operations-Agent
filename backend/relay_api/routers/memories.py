@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from relay_api.deps import CurrentUser, get_llm_gateway, get_settings_dep, require_workspace_role
 from relay_core.config import Settings
 from relay_core.db.models.memories import KINDS, Memory
+from relay_core.db.repositories.audit import AuditLogRepository
 from relay_core.db.repositories.memories import MemoryRepository
 from relay_core.db.session import get_session
 from relay_core.llm.gateway import LLMGateway
@@ -129,6 +130,14 @@ async def delete_memory(
 ) -> None:
     repo = MemoryRepository(session)
     await repo.delete(await _visible_or_404(repo, workspace_id, memory_id, current))
+    await AuditLogRepository(session).record(
+        workspace_id,
+        actor_type="user",
+        actor_user_id=current.user.id,
+        action="memory.deleted",
+        target_type="memory",
+        target_id=memory_id,
+    )
 
 
 def _check_kind(kind: str | None) -> None:

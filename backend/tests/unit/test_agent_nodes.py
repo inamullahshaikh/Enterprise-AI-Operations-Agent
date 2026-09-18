@@ -18,6 +18,7 @@ from relay_core.agent.nodes.guard_input import GuardInput, GuardVerdict
 from relay_core.agent.nodes.plan import PlanNode
 from relay_core.agent.nodes.route import Route, RouteVerdict
 from relay_core.agent.state import AgentState, Plan, PlanStep
+from relay_core.config import Settings
 from relay_core.connectors.base import ToolResult
 from relay_core.llm.schemas import LLMResponse, Usage
 
@@ -49,7 +50,8 @@ def _deps(gateway: FakeGateway) -> AgentDeps:
     return AgentDeps(
         gateway=gateway,  # type: ignore[arg-type]
         events=None,  # type: ignore[arg-type]
-        settings=None,  # type: ignore[arg-type]
+        # Defaults only (no env needed); nodes read experiment toggles off it.
+        settings=Settings.model_construct(),
         conversations=None,  # type: ignore[arg-type]
         messages=None,  # type: ignore[arg-type]
         runs=None,  # type: ignore[arg-type]
@@ -184,3 +186,36 @@ async def test_function_response_caps_what_the_model_sees_of_a_tool_result() -> 
     assert response["truncated"] is True
     assert len(response["result"]) < 20_100
     assert response["result"].endswith("</tool_output>")
+
+
+async def test_single_react_experiment_skips_the_planner() -> None:
+    """Experiment 1 (section 21.6): one step, the whole objective, no planner call."""
+
+    class RecordingRuns:
+        async def set_plan(self, *_: Any) -> None:
+            pass
+
+    gateway = FakeGateway(parsed=None)
+    deps = _deps(gateway)
+    deps.settings = Settings.model_construct(experiment_single_react=True)
+    deps.runs = RecordingRuns()  # type: ignore[assignment]
+    state = _state("Rank renewals by usage").model_copy(
+        update={"available_capabilities": ["sql.query"]}
+    )
+
+    result = await PlanNode(deps)(state)
+
+    assert gateway.calls == []
+    [step] = result["plan"].steps
+    assert step.goal == "Rank renewals by usage"
+    assert step.optional_capabilities == ["sql.query"]
+
+
+async def test_unwrapped_experiment_drops_the_untrusted_tag() -> None:
+    """Experiment 5 (section 21.6): same text, no `<tool_output trust="untrusted">` wrapper."""
+    call = types.FunctionCall(name="web__fetch", args={})
+    content = build_function_response_content(
+        [call], [ToolResult(ok=True, content="page")], wrap=False
+    )
+    assert content.parts is not None and content.parts[0].function_response is not None
+    assert (content.parts[0].function_response.response or {})["result"] == '"page"'

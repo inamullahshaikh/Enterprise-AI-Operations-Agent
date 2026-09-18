@@ -24,11 +24,13 @@ from relay_api.deps import (
     get_settings_dep,
     require_workspace_role,
 )
+from relay_api.ratelimit import connector_test_rate_limit
 from relay_core.config import Settings
 from relay_core.connectors.manifest import ConnectorManifest, load_manifests
 from relay_core.connectors.openapi_spec import Preview, parse_spec, preview
 from relay_core.connectors.registry import CONNECTOR_TYPES
 from relay_core.db.models.connectors import ConnectorInstallation
+from relay_core.db.repositories.audit import AuditLogRepository
 from relay_core.db.repositories.connector_credentials import ConnectorCredentialRepository
 from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.db.session import get_session
@@ -219,7 +221,25 @@ async def install_connector(
             installation_id=installation.id,
             encrypted=encrypt_secrets(kms, body.secrets),
         )
+        await AuditLogRepository(session).record(
+            workspace_id,
+            actor_type="user",
+            actor_user_id=current.user.id,
+            action="credentials.written",
+            target_type="connector_installation",
+            target_id=installation.id,
+            details={"fields": len(body.secrets)},
+        )
     await session.flush()
+    await AuditLogRepository(session).record(
+        workspace_id,
+        actor_type="user",
+        actor_user_id=current.user.id,
+        action="connector.installed",
+        target_type="connector_installation",
+        target_id=installation.id,
+        details={"connector_key": body.connector_key, "name": body.name},
+    )
 
     ctx = installation_context(workspace_id, current.user.id, installation, body.secrets)
     try:
@@ -295,6 +315,15 @@ async def update_installation(
     installation = await _owned_installation(session, workspace_id, installation_id)
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(installation, field, value)
+    await AuditLogRepository(session).record(
+        workspace_id,
+        actor_type="user",
+        actor_user_id=current.user.id,
+        action="connector.updated",
+        target_type="connector_installation",
+        target_id=installation_id,
+        details=body.model_dump(exclude_none=True),
+    )
     await session.flush()
     return InstallationOut.from_model(installation)
 
@@ -312,9 +341,22 @@ async def uninstall_connector(
         ctx = installation_context(workspace_id, current.user.id, installation, {})
         await connector_cls().on_uninstall(ctx)
     await ConnectorInstallationRepository(session).delete(workspace_id, installation_id)
+    await AuditLogRepository(session).record(
+        workspace_id,
+        actor_type="user",
+        actor_user_id=current.user.id,
+        action="connector.deleted",
+        target_type="connector_installation",
+        target_id=installation_id,
+        details={"connector_key": installation.connector_key, "name": installation.name},
+    )
 
 
-@router.post("/{installation_id}/test", response_model=InstallationOut)
+@router.post(
+    "/{installation_id}/test",
+    response_model=InstallationOut,
+    dependencies=[Depends(connector_test_rate_limit())],
+)
 async def test_connector(
     workspace_id: uuid.UUID = Path(...),
     installation_id: uuid.UUID = Path(...),

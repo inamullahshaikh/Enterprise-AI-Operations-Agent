@@ -16,6 +16,8 @@ TOOL_STARTED = "tool.started"
 TOOL_FINISHED = "tool.finished"
 APPROVAL_REQUIRED = "approval.required"
 APPROVAL_DECIDED = "approval.decided"
+BUDGET_EXCEEDED = "budget.exceeded"
+CONTENT_FLAGGED = "content.flagged"
 
 # Events that end an SSE stream (docs/system-design.md section 16.2).
 #

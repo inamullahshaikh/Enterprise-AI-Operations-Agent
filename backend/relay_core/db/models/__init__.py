@@ -3,6 +3,7 @@ autogenerate and for `AsyncPostgresSaver`/test schema creation."""
 
 from relay_core.db.models.approvals import Approval
 from relay_core.db.models.attachments import Attachment
+from relay_core.db.models.audit import AuditLog
 from relay_core.db.models.connectors import ConnectorCredential, ConnectorInstallation
 from relay_core.db.models.conversations import Conversation, Message
 from relay_core.db.models.documents import Collection, Document, DocumentChunk
@@ -18,6 +19,7 @@ __all__ = [
     "AgentRun",
     "Approval",
     "Attachment",
+    "AuditLog",
     "Collection",
     "ConnectorCredential",
     "ConnectorInstallation",

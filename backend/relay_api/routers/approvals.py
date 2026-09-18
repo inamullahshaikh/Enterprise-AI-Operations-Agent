@@ -28,6 +28,7 @@ from relay_api.deps import (
 )
 from relay_core.db.models.approvals import Approval
 from relay_core.db.repositories.approvals import AlreadyDecidedError, ApprovalRepository
+from relay_core.db.repositories.audit import AuditLogRepository
 from relay_core.db.session import get_session
 from relay_core.security.rbac import Role, has_at_least
 
@@ -133,6 +134,16 @@ async def decide_approval(
         "edited_args": {str(k): v for k, v in body.edited_args.items()},
         "reason": body.reason,
     }
+    await AuditLogRepository(session).record(
+        workspace_id,
+        actor_type="user",
+        actor_user_id=current.user.id,
+        action="approval.decided",
+        target_type="approval",
+        target_id=approval_id,
+        run_id=approval.run_id,
+        details={"status": decided_status, **decision},
+    )
     # Commit before dispatching: the worker resumes in a separate process against a separate
     # connection and reads this decision back, so `get_session`'s post-handler commit would be
     # too late (same reasoning as `conversations.send_message`).

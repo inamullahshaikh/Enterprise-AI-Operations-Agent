@@ -1,0 +1,10 @@
+key: config_matrix_highest_mrr_full
+suite: config_matrix
+connector_profile: full
+message: "Which single account has the highest monthly recurring revenue?"
+expectations:
+  route: task
+  reference_sql: >
+    SELECT a.name FROM subscriptions s JOIN accounts a ON a.id = s.account_id
+    ORDER BY s.mrr_usd DESC LIMIT 1
+tags: [config_matrix, highest_mrr]

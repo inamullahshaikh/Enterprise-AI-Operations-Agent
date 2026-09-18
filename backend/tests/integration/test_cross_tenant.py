@@ -241,3 +241,27 @@ async def test_memory_routes_are_tenant_scoped(
         patched = await client.patch(path, json={"is_active": False}, headers=other)
         assert patched.status_code == 404
         assert (await client.delete(path, headers=other)).status_code == 404
+
+
+async def test_audit_logs_of_another_workspace_are_invisible(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    from relay_core.db.repositories.audit import AuditLogRepository
+
+    headers = _auth(await _register_and_get_token(client, "audit-tenant@example.com"))
+    ws_a = (await client.post("/api/v1/workspaces", json={"name": "A"}, headers=headers)).json()
+    ws_b = (await client.post("/api/v1/workspaces", json={"name": "B"}, headers=headers)).json()
+    row = await AuditLogRepository(db_session).record(
+        uuid.UUID(ws_a["id"]),
+        actor_type="system",
+        actor_user_id=None,
+        action="tenant.test",
+        target_type="test",
+    )
+
+    url = f"/api/v1/workspaces/{ws_b['id']}/audit-logs"
+    resp = await client.get(url, headers=headers)
+    assert resp.status_code == 200
+    assert all(r["action"] != "tenant.test" for r in resp.json())
+    # Another workspace's row id is not a usable cursor either.
+    assert (await client.get(url, params={"before": row.id}, headers=headers)).json() == []

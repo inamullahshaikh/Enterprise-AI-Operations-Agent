@@ -66,7 +66,14 @@ async def ingest_document(
         to_embed = [c for c in new_chunks if c.content_hash not in existing_by_hash]
         vectors = (
             await gateway.embed(
-                [c.content for c in to_embed], task="RETRIEVAL_DOCUMENT", settings=settings
+                [
+                    f"{c.context_header}\n\n{c.content}"
+                    if settings.rag_embed_context_headers
+                    else c.content
+                    for c in to_embed
+                ],
+                task="RETRIEVAL_DOCUMENT",
+                settings=settings,
             )
             if to_embed
             else []

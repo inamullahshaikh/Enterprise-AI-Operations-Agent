@@ -1,0 +1,5 @@
+# Hand labels for calibrating the fabrication judge (`relay-eval calibrate`, Phase 8 D2).
+# Empty until a real `relay-eval run --all` pass exists to label: see relay_eval/calibrate.py
+# for the entry format. Until this holds ~50 labels and kappa is reported, the fabrication gate
+# stays off (`--fabrication-gate` is not passed in CI).
+[]

@@ -11,15 +11,19 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Path, Query, UploadFile, status
 from pydantic import BaseModel, Field
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay_api.deps import (
     CurrentUser,
     RunDispatcher,
     get_object_store,
+    get_redis,
     get_run_dispatcher,
     require_workspace_role,
 )
+from relay_api.errors import ProblemDetail
+from relay_api.ratelimit import message_rate_limit
 from relay_core.connectors.builtin.csv_profile import infer_capabilities, profile_csv
 from relay_core.db.models.attachments import Attachment
 from relay_core.db.models.conversations import Conversation, Message
@@ -27,7 +31,9 @@ from relay_core.db.repositories.agent_runs import AgentRunRepository
 from relay_core.db.repositories.attachments import AttachmentRepository
 from relay_core.db.repositories.conversations import ConversationRepository
 from relay_core.db.repositories.messages import MessageRepository
+from relay_core.db.repositories.workspaces import WorkspaceRepository
 from relay_core.db.session import get_session
+from relay_core.policy.budgets import budget_resets_at, month_spend
 from relay_core.security.rbac import Role
 from relay_core.storage.object_store import ObjectStore
 
@@ -174,6 +180,7 @@ async def list_messages(
     "/{conversation_id}/messages",
     response_model=SendMessageResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(message_rate_limit())],
 )
 async def send_message(
     body: SendMessageRequest,
@@ -182,8 +189,41 @@ async def send_message(
     current: CurrentUser = Depends(require_workspace_role(Role.member.name)),
     session: AsyncSession = Depends(get_session),
     dispatch: RunDispatcher = Depends(get_run_dispatcher),
+    redis: Redis = Depends(get_redis),
 ) -> SendMessageResponse:
     await _owned_conversation(session, workspace_id, conversation_id, current.user.id)
+
+    # Section 19.3's conversation lock, read from the runs table rather than a Redis key: the
+    # row's status already says whether a run is active, and it cannot outlive its run. A dead
+    # worker's `running` row is failed by the watchdog (`fail_stalled_runs`), which frees it.
+    # ponytail: two messages racing in the same instant can both pass; a partial unique index on
+    # (conversation_id) WHERE status is active closes that if it is ever seen.
+    active = await AgentRunRepository(session).active_for_conversation(
+        workspace_id, conversation_id
+    )
+    if active is not None:
+        raise ProblemDetail(
+            status.HTTP_409_CONFLICT,
+            "A run is already active in this conversation",
+            detail=f"Run {active.id} is {active.status}; wait for it to finish.",
+            type_="https://relay.dev/problems/conversation-busy",
+        )
+
+    # Section 19.2: refused before a run row exists. A run already queued or running when the
+    # cap is reached is left to finish.
+    workspace = await WorkspaceRepository(session).get(workspace_id)
+    assert workspace is not None
+    spent = await month_spend(session, redis, workspace_id)
+    if spent >= workspace.monthly_budget_usd:
+        raise ProblemDetail(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            "Monthly budget exhausted",
+            detail=(
+                f"This workspace has spent ${spent:.2f} of its ${workspace.monthly_budget_usd:.2f}"
+                f" monthly budget. It resets on {budget_resets_at():%Y-%m-%d}."
+            ),
+            type_="https://relay.dev/problems/monthly-budget-exceeded",
+        )
 
     messages = MessageRepository(session)
     message = await messages.create(

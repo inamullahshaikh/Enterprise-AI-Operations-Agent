@@ -3,6 +3,7 @@ suite: capability_detection
 connector_profile: db_only
 message: "Find customers whose subscriptions expire this month and draft a renewal email to each."
 expectations:
+  fabrication_check: true
   route: task
   missing_capabilities: [email.draft]
 tags: [capability_detection]

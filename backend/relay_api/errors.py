@@ -38,5 +38,8 @@ def install_error_handlers(app: FastAPI) -> None:
             "instance": request.url.path,
         }
         return JSONResponse(
-            status_code=exc.status_code, content=body, media_type="application/problem+json"
+            status_code=exc.status_code,
+            content=body,
+            media_type="application/problem+json",
+            headers=exc.headers,
         )

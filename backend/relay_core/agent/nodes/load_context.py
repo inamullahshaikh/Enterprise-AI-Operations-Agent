@@ -13,10 +13,11 @@ Phase 5 adds `user_role`, which section 13.1's approval rules need.
 """
 
 import logging
+import time
 from typing import Any
 
 from relay_core.agent.deps import AgentDeps
-from relay_core.agent.state import AgentState
+from relay_core.agent.state import AgentState, Budget
 from relay_core.capabilities.resolver import resolve_available_capabilities
 
 logger = logging.getLogger(__name__)
@@ -48,10 +49,15 @@ class LoadContext:
         # up, so fall back to the least privileged role — that direction only ever asks for
         # more approvals, never fewer.
         member = await self.deps.members.get(state.workspace_id, state.user_id)
-        conversation = await self.deps.conversations.get(
-            state.workspace_id, state.conversation_id
-        )
+        conversation = await self.deps.conversations.get(state.workspace_id, state.conversation_id)
+        policy = await self.deps.policies.get(state.workspace_id)
+        budget = Budget.model_validate({**policy.run_budget, "clock_started_at": time.monotonic()})
         return {
+            "budget": budget,
+            "budget_exhausted": None,
+            "touched_untrusted": None,
+            "pii_redaction": policy.pii_redaction,
+            "pii_map": {},
             "recent_messages": [{"role": m.role, "content": m.content} for m in history],
             "history_summary": conversation.summary if conversation is not None else None,
             "memories": await self._memories(state),

@@ -80,6 +80,38 @@ groundedness and memory cases. See
 and [docs/phase-7-status.md](docs/phase-7-status.md). Connecting Google needs an OAuth client with
 `{API_BASE_URL}/api/v1/oauth/callback` registered as a redirect URI.
 
+**Phase 8** (hardening): every admin action that changes something leaves an `audit_logs` row
+(secrets scrubbed), and `GET /usage` answers what the cut Grafana dashboards would have — cost by
+day, model or node, and tool reliability by connector. A run that spends its per-workspace budget
+stops and still answers, saying what it covered; a workspace past its monthly budget gets a 402
+before a run exists. Messages are rate limited per user and workspace, runs are capped per
+workspace with one active run per conversation, a watchdog fails runs that stall, and a nightly
+job applies each workspace's retention window. Tool output that tries to instruct the agent is
+flagged by a prefiltered classifier and kept in view rather than dropped, and once a run has read
+anything untrusted every write needs a human, whatever the policy says. Email addresses and
+phone numbers reach the model as placeholders and are restored for the connector and the user.
+Logs are JSON with `request_id`/`run_id` and no secrets. The eval harness gained an `injection`
+suite, a `config_matrix` suite gated against per-profile baselines, a fabrication judge (gate off
+until calibrated), and working `--repeats`/`--concurrency`. See
+[docs/adr/0014-hardening-budgets-and-injection-defenses.md](docs/adr/0014-hardening-budgets-and-injection-defenses.md)
+and [docs/phase-8-status.md](docs/phase-8-status.md).
+
+### Experiments (§21.6)
+
+Each row compares two eval runs with exactly one setting changed. Method, commands and raw
+report names are in [evals/EXPERIMENTS.md](evals/EXPERIMENTS.md). **These have not been run
+yet**: they need a funded real-Gemini eval pass, and the table stays empty until real numbers
+exist.
+
+| Experiment | Suite | Baseline | Variant | Cost |
+|------------|-------|----------|---------|------|
+| Plan-and-execute vs single ReAct loop | all | — | — | — |
+| Tool retrieval on vs off (64 tools) | tool_selection | — | — | — |
+| Planner thinking high vs low | all | — | — | — |
+| Hybrid vs vector-only / rerank / contextual headers | rag | — | — | — |
+| Untrusted-content wrapping on vs off | injection | — | — | — |
+| Schema annotations on vs off | text_to_sql | — | — | — |
+
 Phase numbers here follow the design doc. The commit history runs one behind: the commit titled
 "Phase 3 completed" holds both Phase 3 and Phase 4.
 

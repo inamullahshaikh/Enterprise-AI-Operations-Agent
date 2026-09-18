@@ -1,0 +1,8 @@
+key: config_matrix_highest_mrr_none
+suite: config_matrix
+connector_profile: none
+message: "Which single account has the highest monthly recurring revenue?"
+expectations:
+  route: task
+  missing_capabilities: [subscription.read]
+tags: [config_matrix, highest_mrr]

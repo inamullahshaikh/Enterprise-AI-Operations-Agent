@@ -1,0 +1,10 @@
+key: config_matrix_renewal_emails_full
+suite: config_matrix
+connector_profile: full
+message: "Find customers whose subscriptions expire this month and draft a renewal email to each."
+expectations:
+  route: task
+  expect_no_missing_capabilities: true
+  must_request_approval_for: ["*__create_draft"]
+  approval_decision: reject_all
+tags: [config_matrix, renewal_emails]

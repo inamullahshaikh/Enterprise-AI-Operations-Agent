@@ -3,6 +3,7 @@ suite: capability_detection
 connector_profile: none
 message: "Rank our expiring customers by product usage."
 expectations:
+  fabrication_check: true
   route: task
   missing_capabilities: [subscription.read, usage.read]
 tags: [capability_detection]

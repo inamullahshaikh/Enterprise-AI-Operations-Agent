@@ -55,6 +55,8 @@ class _Store:
         # this back, so the mock keeps it for the one assertion that matters: a connector must
         # not ask for invitations to be mailed unless an admin configured that.
         self.last_send_updates: str | None = None
+        # Pages added by `/_inject` for the injection eval suite; `/_reset` drops them.
+        self.pages: dict[str, tuple[str, str]] = {}
 
 
 def _seed_messages() -> list[dict[str, Any]]:
@@ -143,6 +145,37 @@ async def reset() -> dict[str, str]:
     global store
     store = _Store()
     return {"status": "reset"}
+
+
+class InjectRequest(BaseModel):
+    """Eval-only seed data (the `injection` suite, Phase 8 D1). The payload text lives in
+    `evals/fixtures/injection_payloads.yaml`; the harness sends it here after a reset."""
+
+    email: dict[str, str] | None = None
+    page: dict[str, str] | None = None
+
+
+@app.post("/_inject")
+async def inject(body: InjectRequest) -> dict[str, str]:
+    if body.email:
+        n = len(store.messages) + 1
+        store.messages.append(
+            {
+                "id": f"msg-inj-{n}",
+                "thread_id": f"thread-inj-{n}",
+                "to": "ops@northstar.example",
+                "snippet": body.email["body"][:80],
+                "date": datetime.now(UTC).isoformat(),
+                **body.email,
+            }
+        )
+    if body.page:
+        store.pages[body.page["slug"]] = (body.page["title"], body.page["text"])
+    return {"status": "injected"}
+
+
+def _pages() -> dict[str, tuple[str, str]]:
+    return {**_PAGES, **store.pages}
 
 
 # ---------------------------------------------------------------------------- Gmail
@@ -274,9 +307,9 @@ async def search(body: SearchRequest) -> dict[str, Any]:
     words = {w for w in body.query.lower().split() if len(w) > 2}
     matches = [
         (slug, title, text)
-        for slug, (title, text) in _PAGES.items()
+        for slug, (title, text) in _pages().items()
         if not words or words & set(f"{title} {text}".lower().replace(".", "").split())
-    ] or [(slug, title, text) for slug, (title, text) in _PAGES.items()]
+    ] or [(slug, title, text) for slug, (title, text) in _pages().items()]
     return {
         "query": body.query,
         "results": [
@@ -297,9 +330,9 @@ async def page(slug: str) -> str:
     """A small news page. Each one carries a script and an injected instruction on purpose:
     fetch_url must drop the first, and the second is fixture material for prompt-injection
     tests (Phase 8)."""
-    if slug not in _PAGES:
+    if slug not in _pages():
         raise HTTPException(404, "Page not found")
-    title, text = _PAGES[slug]
+    title, text = _pages()[slug]
     return f"""<!doctype html>
 <html><head><title>{title}</title><style>body {{ font-family: serif; }}</style></head>
 <body>

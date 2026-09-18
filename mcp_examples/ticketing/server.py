@@ -6,7 +6,8 @@ Built on the official `mcp` SDK's `MCPServer` (FastMCP's mcp 2.x name) over stre
 `/mcp`. State is in-memory and seeded from the same demo accounts as `mocks/main.py`.
 
 - `MCP_TICKETING_TOKEN`: when set, every request needs `Authorization: Bearer <token>`.
-- `POST /_reset` and `GET /_stats` are for evals and tests, like the mock service's `/_reset`.
+- `POST /_reset`, `POST /_inject` and `GET /_stats` are for evals and tests, like the mock
+  service's.
 """
 
 import os
@@ -120,11 +121,49 @@ def add_comment(ticket_id: str, body: str) -> dict[str, Any]:
     return {"ticket_id": ticket_id, **comment}
 
 
+def _filler(name: str) -> Any:
+    def tool(account_name: str) -> dict[str, Any]:
+        return {"report": name, "account_name": account_name, "rows": []}
+
+    return tool
+
+
+def _register_filler_tools(count: int) -> None:
+    """Experiment 2 (evals/EXPERIMENTS.md) needs a workspace with 60+ tools. Rather than install
+    sixty connectors, `MCP_TICKETING_EXTRA_TOOLS=N` adds N plausible read tools that each return
+    a fixed report, so tool retrieval has a real haystack to search."""
+    areas = ["billing", "usage", "seats", "invoices", "contracts", "health", "nps", "churn"]
+    verbs = ["summary", "trend", "breakdown", "forecast", "audit", "export", "history", "alerts"]
+    for i in range(count):
+        area, verb = areas[i % len(areas)], verbs[(i // len(areas)) % len(verbs)]
+        name = f"{area}_{verb}_{i}"
+
+        mcp.add_tool(
+            _filler(name),
+            name=name,
+            description=f"Report the {verb} of {area} for one account.",
+            annotations=_READ,
+        )
+
+
+_register_filler_tools(int(os.environ.get("MCP_TICKETING_EXTRA_TOOLS", "0")))
+
+
 @mcp.custom_route("/_reset", methods=["POST"])
 async def reset(request: Request) -> Response:
     global store
     store = _Store()
     return JSONResponse({"status": "reset"})
+
+
+@mcp.custom_route("/_inject", methods=["POST"])
+async def inject(request: Request) -> Response:
+    """Eval-only: adds one ticket from `evals/fixtures/injection_payloads.yaml` (Phase 8 D1).
+    Not counted in `/_stats`, which counts what the agent created."""
+    ticket = await request.json()
+    ticket_id = f"TCK-{1000 + len(store.tickets) + 1}"
+    store.tickets[ticket_id] = {"ticket_id": ticket_id, "status": "open", "comments": [], **ticket}
+    return JSONResponse({"ticket_id": ticket_id})
 
 
 @mcp.custom_route("/_stats", methods=["GET"])

@@ -27,6 +27,7 @@ approved it.
 """
 
 import asyncio
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -93,7 +94,11 @@ class ApprovalGate:
         results, executed = await self._answer_turn(
             state, approval, decision, calls, tools, rules, approved_ids
         )
-        contents.append(build_function_response_content(calls, results))
+        contents.append(
+            build_function_response_content(
+                calls, results, wrap=self.deps.settings.wrap_untrusted_output
+            )
+        )
 
         await self.deps.events.publish(
             state.run_id,
@@ -106,7 +111,10 @@ class ApprovalGate:
             "scratchpad": dump_contents(contents),
             "pending_approval_id": None,
             "budget": state.budget.model_copy(
-                update={"used_tool_calls": state.budget.used_tool_calls + executed}
+                update={
+                    "used_tool_calls": state.budget.used_tool_calls + executed,
+                    "clock_started_at": time.monotonic(),
+                }
             ),
         }
 
@@ -136,7 +144,9 @@ class ApprovalGate:
                 "args": dict(call.args or {}),
             }:
                 row_id = proposed.pop(0)[1]
-            newly_gated = row_id is None and requires_approval(bound, call, rules, state.user_role)
+            newly_gated = row_id is None and requires_approval(
+                bound, call, rules, state.user_role, state.touched_untrusted is not None
+            )
             planned.append(
                 _PlannedCall(call=call, bound=bound, row_id=row_id, newly_gated=newly_gated)
             )
@@ -190,6 +200,7 @@ class ApprovalGate:
             bound=bound,
             args=args,
             tool_call_id=row_id,
+            pii_map=state.pii_map,
         )
         return result, True
 

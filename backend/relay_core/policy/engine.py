@@ -65,12 +65,17 @@ def needs_approval(
     args: dict[str, Any],
     rules: ApprovalRules,
     user_role: str,
+    touched_untrusted: bool = False,
 ) -> bool:
     if risk is Risk.DESTRUCTIVE:
         # Section 13.1: destructive calls are never waivable, whatever the rules or the role say.
         return True
     if risk is not Risk.WRITE:
         return False
+    if touched_untrusted:
+        # Section 18.4 step 5: once a run has read untrusted content, a write could be carrying
+        # it out, so a human sees every one, whatever the overrides or the caller's role.
+        return True
 
     rule, threshold = rules.for_tool(tool_name)
     if rule == "never":

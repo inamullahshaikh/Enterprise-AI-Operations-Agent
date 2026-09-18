@@ -3,6 +3,7 @@ suite: capability_detection
 connector_profile: none
 message: "Which customers have subscriptions ending this month?"
 expectations:
+  fabrication_check: true
   route: task
   missing_capabilities: [subscription.read]
 tags: [capability_detection]

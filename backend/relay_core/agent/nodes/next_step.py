@@ -51,8 +51,9 @@ class NextStep:
 
         status_by_id = {s.id: s.status for s in plan.steps}
         for step in plan.steps:
-            if step.status == "pending" and any(
-                status_by_id.get(dep) in _TERMINAL_NOT_DONE for dep in step.depends_on
+            if step.status == "pending" and (
+                state.budget_exhausted
+                or any(status_by_id.get(dep) in _TERMINAL_NOT_DONE for dep in step.depends_on)
             ):
                 plan = update_step(plan, step.id, status="skipped")
                 status_by_id[step.id] = "skipped"

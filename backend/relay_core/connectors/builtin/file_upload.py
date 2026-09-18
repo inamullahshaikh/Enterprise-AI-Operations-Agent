@@ -22,6 +22,7 @@ from relay_core.storage.object_store import ObjectStore
 
 class FileUploadConnector(Connector):
     key = "file_upload"
+    untrusted_source = False
     display_name = "File uploads"
     auth_type = AuthType.NONE
 

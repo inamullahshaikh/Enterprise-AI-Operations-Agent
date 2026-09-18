@@ -12,6 +12,7 @@ would make every run slower for no benefit.
 """
 
 import hashlib
+import os
 import uuid
 from pathlib import Path
 
@@ -40,6 +41,8 @@ _FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures"
 _DOCS_ONLY_FIXTURES = [
     ("renewal-playbook.md", "Renewal Playbook"),
     ("support-escalation-policy.md", "Support Escalation Policy"),
+    # Carries an injected footer for the `injection` suite; the rest of it is a normal document.
+    ("refund-policy.md", "Refund Policy"),
 ]
 
 
@@ -110,6 +113,10 @@ async def _ensure_postgres_installation(
             "schemas": ["public"],
             "statement_timeout_s": 10,
             "row_limit": 500,
+            # Experiment 6 (evals/EXPERIMENTS.md). Read when the installation is created, so an
+            # arm that changes it starts from a fresh eval workspace.
+            "schema_annotations": os.environ.get("EXPERIMENT_SQL_SCHEMA_ANNOTATIONS", "true")
+            != "false",
         },
         secrets={"username": url.username or "", "password": url.password or ""},
     )

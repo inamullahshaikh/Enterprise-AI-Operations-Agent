@@ -202,3 +202,15 @@ async def test_health_check_fails_with_bad_credentials(
     healthy, message = await connector.health_check(bad_ctx)
     assert healthy is False
     assert "Could not connect" in message
+
+
+async def test_describe_table_without_schema_annotations_omits_the_keys(
+    demo_pg: PostgresContainer, seeded: None
+) -> None:
+    """Experiment 6 (section 21.6): columns and samples only."""
+    ctx = _ctx(demo_pg)
+    ctx.config["schema_annotations"] = False
+    result = await PostgresConnector().call_tool(ctx, "describe_table", {"table": "accounts"})
+    assert result.ok, result.error
+    assert "primary_key" not in result.content and "foreign_keys" not in result.content
+    assert result.content["columns"]

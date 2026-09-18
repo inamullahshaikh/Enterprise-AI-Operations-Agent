@@ -14,12 +14,18 @@ rate limiting. The limiter itself is exercised directly in `tests/unit`, not by 
 
 import base64
 import os
+import sys
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from relay_core.config import Settings
+
+# The eval package is tested from here too (the integration suite drives its harness), so it is
+# importable without `pip install -e ../evals/relay_eval` or a PYTHONPATH.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "evals" / "relay_eval"))
 
 
 @pytest.fixture
@@ -48,5 +54,9 @@ def test_settings(tmp_path) -> Settings:
         access_token_ttl_min=15,
         refresh_token_ttl_days=14,
         gemini_rpm_limit=100_000,
+        # Every test shares one Redis window; the production limits would trip the suite.
+        rate_limit_messages_per_user_min=100_000,
+        rate_limit_messages_per_workspace_min=100_000,
+        rate_limit_connector_tests_min=100_000,
         local_master_key="base64:" + base64.b64encode(os.urandom(32)).decode(),
     )

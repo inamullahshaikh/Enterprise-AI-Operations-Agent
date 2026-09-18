@@ -29,6 +29,7 @@ from relay_core.connectors.oauth import (
     tokens_to_secrets,
 )
 from relay_core.connectors.registry import CONNECTOR_TYPES
+from relay_core.db.repositories.audit import AuditLogRepository
 from relay_core.db.repositories.connector_credentials import ConnectorCredentialRepository
 from relay_core.db.repositories.connector_installations import ConnectorInstallationRepository
 from relay_core.db.repositories.workspaces import WorkspaceRepository
@@ -137,6 +138,14 @@ async def oauth_callback(
         installation_id=installation_id,
         encrypted=encrypt_secrets(kms, secrets),
         oauth_expires_at=tokens.expires_at,
+    )
+    await AuditLogRepository(session).record(
+        workspace_id,
+        actor_type="user",
+        actor_user_id=uuid.UUID(claims["user_id"]),
+        action="connector.oauth_connected",
+        target_type="connector_installation",
+        target_id=installation_id,
     )
 
     connector = CONNECTOR_TYPES[installation.connector_key]()

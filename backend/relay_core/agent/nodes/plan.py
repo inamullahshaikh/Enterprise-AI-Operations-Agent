@@ -10,7 +10,7 @@ from typing import Any
 
 from relay_core.agent.context import remembered_context
 from relay_core.agent.deps import AgentDeps
-from relay_core.agent.state import AgentState, Plan
+from relay_core.agent.state import AgentState, Plan, PlanStep
 from relay_core.capabilities.taxonomy import render_catalog
 from relay_core.events.types import PLAN_CREATED
 from relay_core.llm.profiles import PLANNER
@@ -44,6 +44,26 @@ class PlanNode:
         self.deps = deps
 
     async def __call__(self, state: AgentState) -> dict[str, Any]:
+        if self.deps.settings.experiment_single_react:
+            # Experiment 1 (section 21.6): no planner. One step whose goal is the whole objective
+            # and which may use anything available *is* a single ReAct loop, on the same
+            # executor, tools and validators as the real path.
+            plan = Plan(
+                objective=state.user_message,
+                steps=[
+                    PlanStep(
+                        id="s1",
+                        goal=state.user_message,
+                        optional_capabilities=state.available_capabilities,
+                        expected_output="A complete answer to the objective",
+                    )
+                ],
+            )
+            await self.deps.runs.set_plan(
+                state.workspace_id, state.run_id, plan.model_dump(mode="json")
+            )
+            return {"plan": plan}
+
         # Custom capabilities (`custom.*`, from MCP/OpenAPI tool tagging) have no taxonomy entry,
         # so the planner could never require one unless the workspace's own are listed too.
         custom = [c for c in state.available_capabilities if c.startswith("custom.")]

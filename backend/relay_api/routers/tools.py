@@ -24,6 +24,7 @@ from relay_core.capabilities.tagger import valid_capability
 from relay_core.capabilities.taxonomy import CAPABILITY_TAXONOMY
 from relay_core.connectors.manifest import load_manifests
 from relay_core.db.models.tools import ToolDefinition
+from relay_core.db.repositories.audit import AuditLogRepository
 from relay_core.db.repositories.documents import DocumentRepository
 from relay_core.db.repositories.tool_definitions import HEALTHY_ENOUGH, ToolDefinitionRepository
 from relay_core.db.session import get_session
@@ -131,6 +132,15 @@ async def update_tool(
         tool.risk, tool.risk_overridden = body.risk, True
     if body.reviewed:
         tool.needs_review = False
+    await AuditLogRepository(session).record(
+        workspace_id,
+        actor_type="user",
+        actor_user_id=current.user.id,
+        action="tool.updated",
+        target_type="tool_definition",
+        target_id=tool_id,
+        details=body.model_dump(exclude_none=True),
+    )
     await session.flush()
     return ToolOut.from_model(tool)
 

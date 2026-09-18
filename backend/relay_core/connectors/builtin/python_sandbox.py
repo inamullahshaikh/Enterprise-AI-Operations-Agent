@@ -42,6 +42,7 @@ _ARTIFACT_CONTENT_TYPES = {
 
 class PythonSandboxConnector(Connector):
     key = "python_sandbox"
+    untrusted_source = False
     display_name = "Python sandbox"
     auth_type = AuthType.NONE
 

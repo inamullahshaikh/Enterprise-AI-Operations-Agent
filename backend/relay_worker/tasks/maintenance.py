@@ -9,20 +9,23 @@ not on a schedule.
 
 `expire_stale_approvals` is the first genuinely scheduled job here (Phase 5, section 13.4). An
 undecided approval must not pin a run open forever, so once its window has elapsed the approval,
-its proposed calls and the run itself are all closed out as expired. Phase 8's retention and
-budget-reset jobs register alongside it.
+its proposed calls and the run itself are all closed out as expired. Phase 8 adds the run
+watchdog (`fail_stalled_runs`, section 19.1) and the nightly retention sweep (`apply_retention`,
+section 14.5); their logic lives in `relay_core.maintenance`.
 """
 
 import asyncio
 import hashlib
 import sys
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 from redis.asyncio import Redis
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from relay_core.agent.graph import get_postgres_checkpointer
 from relay_core.approvals import expire_stale_approvals as expire_stale_approvals_once
 from relay_core.config import Settings, get_settings
 from relay_core.connectors.installs import ensure_installation
@@ -33,6 +36,8 @@ from relay_core.db.repositories.workspaces import WorkspaceMemberRepository, Wor
 from relay_core.db.session import get_sessionmaker
 from relay_core.events.publisher import EventPublisher
 from relay_core.llm.gateway import LLMGateway, build_llm_gateway
+from relay_core.maintenance import apply_retention as apply_retention_once
+from relay_core.maintenance import fail_stalled_runs as fail_stalled_runs_once
 from relay_core.rag.ingest import ingest_document
 from relay_core.security.crypto import build_kms
 from relay_core.security.passwords import hash_password
@@ -202,6 +207,36 @@ async def _expire_stale_approvals_async() -> None:
             await session.commit()
     finally:
         await redis.aclose()
+
+
+@app.task(name="relay_worker.tasks.maintenance.fail_stalled_runs")  # type: ignore[untyped-decorator]
+def fail_stalled_runs() -> None:
+    asyncio.run(_fail_stalled_runs_async())
+
+
+async def _fail_stalled_runs_async() -> None:
+    settings = get_settings()
+    redis = Redis.from_url(settings.redis_url)
+    try:
+        async with get_sessionmaker()() as session:
+            await fail_stalled_runs_once(session, EventPublisher(redis), now=datetime.now(UTC))
+            await session.commit()
+    finally:
+        await redis.aclose()
+
+
+@app.task(name="relay_worker.tasks.maintenance.apply_retention")  # type: ignore[untyped-decorator]
+def apply_retention() -> None:
+    asyncio.run(_apply_retention_async())
+
+
+async def _apply_retention_async() -> None:
+    settings = get_settings()
+    checkpointer = await get_postgres_checkpointer(settings)
+    async with get_sessionmaker()() as session:
+        await apply_retention_once(
+            session, build_object_store(settings), checkpointer, now=datetime.now(UTC)
+        )
 
 
 if __name__ == "__main__":

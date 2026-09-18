@@ -28,6 +28,7 @@ _MAX_GET_DOCUMENT_CHARS = 20_000
 
 class DocumentsConnector(Connector):
     key = "documents"
+    untrusted_source = False
     display_name = "Documents"
     auth_type = AuthType.NONE
 

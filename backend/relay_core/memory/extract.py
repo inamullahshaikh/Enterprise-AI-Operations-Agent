@@ -42,18 +42,23 @@ DUPLICATE_DISTANCE = 1.0 - 0.92
 _MAX_PER_RUN = 5
 _MAX_EXISTING_SHOWN = 30
 
-# Content shaped like a credential, whatever the model thought it was. Deliberately broad: a
-# dropped memory costs nothing, a stored key is a breach.
-_SECRET_SHAPES = re.compile(
-    r"(?i)(?:"
-    r"\b(?:(?:api|secret|private|access|auth|license)[ _-]?keys?|secrets?|passwords?|passwd"
-    r"|passphrases?|credentials?|(?:access|refresh|auth|bearer)[ _-]?tokens?|bearer)\b"
-    r"|\bsk-[A-Za-z0-9_-]{12,}"
+# Strings shaped like a credential value. `relay_core.security.scrub` redacts these from logs
+# and audit rows, so there is one definition of "looks like a key".
+SECRET_VALUE_SHAPES = (
+    r"\bsk-[A-Za-z0-9_-]{12,}"
     r"|AIza[A-Za-z0-9_-]{16,}"
     r"|gh[pousr]_[A-Za-z0-9]{20,}"
     r"|xox[baprs]-[A-Za-z0-9-]{10,}"
     r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\."
     r"|[A-Za-z0-9+/]{40,}={0,2}"
+)
+# Content shaped like a credential, or talking about one, whatever the model thought it was.
+# Deliberately broad: a dropped memory costs nothing, a stored key is a breach.
+_SECRET_SHAPES = re.compile(
+    r"(?i)(?:"
+    r"\b(?:(?:api|secret|private|access|auth|license)[ _-]?keys?|secrets?|passwords?|passwd"
+    r"|passphrases?|credentials?|(?:access|refresh|auth|bearer)[ _-]?tokens?|bearer)\b"
+    rf"|{SECRET_VALUE_SHAPES}"
     r")"
 )
 

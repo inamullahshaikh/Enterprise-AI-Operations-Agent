@@ -68,6 +68,31 @@ class Settings(BaseSettings):
     embedding_model: str = "gemini-embedding-001"
     embedding_dim: int = 768
     gemini_rpm_limit: int = 60
+    # The eval harness's fabrication judge (Phase 8 D2). Pinned separately from
+    # `model_validator` so a production model upgrade does not silently move eval scores.
+    model_eval_judge: str = "gemini-3.8-flash"
+
+    # HTTP rate limits (section 15.6), per minute. Settings rather than constants so the test
+    # suite and the eval harness, which share one Redis, can raise them.
+    rate_limit_messages_per_user_min: int = 60
+    rate_limit_messages_per_workspace_min: int = 600
+    rate_limit_connector_tests_min: int = 10
+    # Section 19.3. A run over the limit stays `queued` and its task retries with backoff.
+    max_concurrent_runs_per_workspace: int = 3
+
+    # Section 21.6 experiment toggles (evals/EXPERIMENTS.md). Every default is the production
+    # behaviour, so an experiment arm is a setting, never a fork of the code path.
+    # 1: skip the planner and run the whole objective as one ReAct step.
+    experiment_single_react: bool = False
+    # 2: rank a large tool set down to the query's nearest tools (section 7.3).
+    tool_retrieval_enabled: bool = True
+    # 4: the keyword leg of hybrid retrieval, the Flash-Lite rerank, and embedding each chunk
+    #    with its contextual header ("Title > Section") prepended.
+    rag_hybrid: bool = True
+    rag_rerank: bool = True
+    rag_embed_context_headers: bool = False
+    # 5: the `<tool_output trust="untrusted">` wrapping around tool results (section 8.7).
+    wrap_untrusted_output: bool = True
 
     # Connectors
     sandbox_url: str = "http://sandbox:8080"

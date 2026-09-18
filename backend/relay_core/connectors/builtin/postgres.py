@@ -40,6 +40,9 @@ class _Config(BaseModel):
     schemas: list[str] = ["public"]
     statement_timeout_s: float = 10.0
     row_limit: int = 500
+    # Primary and foreign keys in `describe_table`'s answer. Off only for section 21.6's
+    # experiment 6, which measures what the model loses without them.
+    schema_annotations: bool = True
 
 
 class _Secrets(BaseModel):
@@ -55,6 +58,7 @@ def _quote_ident(name: str) -> str:
 
 class PostgresConnector(Connector):
     key = "postgres"
+    untrusted_source = False
     display_name = "PostgreSQL"
     auth_type = AuthType.CONNECTION_STRING
 
@@ -215,15 +219,14 @@ class PostgresConnector(Connector):
             sample_rows = await conn.fetch(f"SELECT * FROM {quoted_schema}.{quoted_table} LIMIT 3")
         finally:
             await conn.close()
-        return ToolResult(
-            ok=True,
-            content={
-                "columns": [dict(c) for c in columns],
-                "primary_key": [r["column_name"] for r in primary_key],
-                "foreign_keys": [dict(r) for r in foreign_keys],
-                "sample_rows": [dict(r) for r in sample_rows],
-            },
-        )
+        content: dict[str, Any] = {
+            "columns": [dict(c) for c in columns],
+            "sample_rows": [dict(r) for r in sample_rows],
+        }
+        if config.schema_annotations:
+            content["primary_key"] = [r["column_name"] for r in primary_key]
+            content["foreign_keys"] = [dict(r) for r in foreign_keys]
+        return ToolResult(ok=True, content=content)
 
     async def _run_sql(
         self, config: _Config, secrets: _Secrets, args: dict[str, Any]

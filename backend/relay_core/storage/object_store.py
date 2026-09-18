@@ -49,6 +49,12 @@ class ObjectStore:
         body: bytes = await asyncio.to_thread(response["Body"].read)
         return body
 
+    async def delete(self, key: str) -> None:
+        """Idempotent: S3/R2 answer a missing key with success."""
+        await asyncio.to_thread(
+            self._client().delete_object, Bucket=self._settings.r2_bucket, Key=key
+        )
+
 
 @lru_cache
 def _client_for(endpoint_url: str, access_key_id: str, secret_access_key: str) -> Any:

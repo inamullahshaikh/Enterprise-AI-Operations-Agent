@@ -26,6 +26,12 @@ or was skipped, say so plainly and explain what that means for the answer rather
 over it. Be concrete: use the actual numbers/names from the step results, not vague summaries.
 """
 
+_BUDGET_PROMPT = """
+
+The run stopped early because it hit its budget ({reason}). Say so at the start of the answer,
+list which parts of the objective were completed and which were not, and give what was gathered.
+"""
+
 _REVISION_PROMPT = """\
 
 Your previous draft made claims the step results do not support:
@@ -51,6 +57,8 @@ class Synthesize:
         )
         contents = [{"role": "user", "parts": [{"text": "\n".join(lines)}]}]
         system = _SYSTEM_PROMPT + remembered_context(state)
+        if state.budget_exhausted:
+            system += _BUDGET_PROMPT.format(reason=state.budget_exhausted)
         if state.unsupported_claims:
             system += _REVISION_PROMPT.format(
                 claims="\n".join(f"- {claim}" for claim in state.unsupported_claims)

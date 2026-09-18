@@ -115,3 +115,11 @@ async def test_an_unembedded_tool_sorts_last_but_still_binds_when_there_is_room(
     bound = await _bound(db_session, test_settings, workspace_id, user_id, query="q", limit=3)
     assert "many__tool_02" in bound
     assert len(bound) == 3
+
+
+async def test_with_retrieval_off_every_tool_binds(db_session: AsyncSession, test_settings) -> None:
+    """Experiment 2 (section 21.6): `TOOL_RETRIEVAL_ENABLED=false` binds the whole set."""
+    workspace_id, user_id = await _tools(db_session, [_at(i * 3) for i in range(30)])
+    off = test_settings.model_copy(update={"tool_retrieval_enabled": False})
+    bound = await _bound(db_session, off, workspace_id, user_id, query="find things", limit=5)
+    assert len(bound) == 30

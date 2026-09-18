@@ -384,3 +384,49 @@ async def test_hybrid_search_reranks_when_the_fused_list_exceeds_top_k(
         top_k=2,
     )
     assert [r.chunk.content for r in results] == ["chunk 2", "chunk 1"]
+
+
+async def test_rerank_and_keyword_leg_can_be_switched_off(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    redis_client: Redis,
+    test_settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Experiment 4 (section 21.6): vector-only, no rerank. `_ScriptedClient` without rerank
+    text fails on any generate call, and the keyword leg raises if it is reached."""
+    workspace_id, user_id = await _register_workspace(client, "rag-toggles@example.com")
+    collection_id, document_id = await _seeded_document(db_session, workspace_id, user_id)
+    weights = [(10.0, 1.0), (5.0, 1.0), (1.0, 1.0)]
+    await DocumentChunkRepository(db_session).replace_for_document(
+        workspace_id=workspace_id,
+        document_id=document_id,
+        chunks=[
+            _chunk(
+                workspace_id=workspace_id,
+                collection_id=collection_id,
+                document_id=document_id,
+                ordinal=i,
+                content=f"chunk {i}",
+                embedding=_graded_vector(*weights[i]),
+            )
+            for i in range(3)
+        ],
+    )
+
+    async def _no_keyword_leg(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("keyword leg used with rag_hybrid off")
+
+    monkeypatch.setattr(DocumentChunkRepository, "keyword_search", _no_keyword_leg)
+    off = test_settings.model_copy(update={"rag_hybrid": False, "rag_rerank": False})
+    results = await hybrid_search(
+        chunk_repo=DocumentChunkRepository(db_session),
+        document_repo=DocumentRepository(db_session),
+        gateway=_gateway(db_session, redis_client, off, _ScriptedClient([_unit_vector(0)])),
+        settings=off,
+        workspace_id=workspace_id,
+        collection_ids=[collection_id],
+        query="anything",
+        top_k=2,
+    )
+    assert [r.chunk.content for r in results] == ["chunk 0", "chunk 1"]

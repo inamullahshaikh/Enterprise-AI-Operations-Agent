@@ -66,17 +66,21 @@ async def hybrid_search(
         query_embedding=query_embedding,
         limit=_LEG_LIMIT,
     )
-    keyword_hits = await chunk_repo.keyword_search(
-        workspace_id=workspace_id,
-        collection_ids=collection_ids,
-        query_text=query,
-        limit=_LEG_LIMIT,
+    keyword_hits = (
+        await chunk_repo.keyword_search(
+            workspace_id=workspace_id,
+            collection_ids=collection_ids,
+            query_text=query,
+            limit=_LEG_LIMIT,
+        )
+        if settings.rag_hybrid
+        else []
     )
     fused = _reciprocal_rank_fusion(vector_hits, keyword_hits)[:_FUSED_LIMIT]
     if not fused:
         return []
 
-    if len(fused) <= top_k:
+    if len(fused) <= top_k or not settings.rag_rerank:
         ranked = fused
     else:
         ranked = await _rerank(

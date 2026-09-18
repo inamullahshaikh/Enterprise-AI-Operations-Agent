@@ -79,6 +79,10 @@ class Connector(ABC):
     key: ClassVar[str]
     display_name: ClassVar[str]
     auth_type: ClassVar[AuthType]
+    # Section 18.4 step 5: a run that reads from an untrusted source sends every later write to
+    # approval. True by default, so a new connector that reaches outside Relay cannot silently opt
+    # out of that rule; only connectors over data the workspace itself controls set it False.
+    untrusted_source: ClassVar[bool] = True
 
     @abstractmethod
     async def list_tools(self, ctx: ExecutionContext) -> list[ToolSpec]: ...

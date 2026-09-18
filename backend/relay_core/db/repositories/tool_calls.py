@@ -1,13 +1,25 @@
 import hashlib
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
 
 from relay_core.db.base import uuid7
+from relay_core.db.models.connectors import ConnectorInstallation
 from relay_core.db.models.tool_calls import ToolCall
 from relay_core.db.repositories.base import WorkspaceScopedRepository
+from relay_core.db.repositories.llm_calls import month_window
+
+
+@dataclass(frozen=True)
+class ToolReliability:
+    """Tool call count for one (connector, status) pair."""
+
+    connector_key: str
+    status: str
+    calls: int
 
 
 def idempotency_key_for(tool_call_id: uuid.UUID) -> str:
@@ -69,6 +81,13 @@ class ToolCallRepository(WorkspaceScopedRepository[ToolCall]):
         call.latency_ms = latency_ms
         call.finished_at = datetime.now(UTC)
         return call
+
+    async def annotate_output(
+        self, workspace_id: uuid.UUID, id_: uuid.UUID, key: str, value: Any
+    ) -> None:
+        call = await self._require(workspace_id, id_)
+        # A new dict, not an in-place edit: SQLAlchemy does not see mutations inside JSONB.
+        call.output = {**(call.output or {}), key: value}
 
     async def create_pending_approval(
         self,
@@ -155,6 +174,34 @@ class ToolCallRepository(WorkspaceScopedRepository[ToolCall]):
             .order_by(ToolCall.created_at)
         )
         return list((await self.session.execute(stmt)).scalars().all())
+
+    async def reliability_breakdown(
+        self,
+        workspace_id: uuid.UUID,
+        *,
+        from_: datetime | None = None,
+        to_: datetime | None = None,
+    ) -> list[ToolReliability]:
+        """Tool calls counted per connector and status (section 20.3's "tool reliability by
+        connector"). Calls with no installation (`file_upload`, or an uninstalled connector)
+        count under "none". Omitted bounds default to the current calendar month."""
+        default_from, default_to = month_window()
+        from_, to_ = from_ or default_from, to_ or default_to
+        connector = func.coalesce(ConnectorInstallation.connector_key, "none").label("connector")
+        stmt = (
+            select(connector, ToolCall.status, func.count())
+            .select_from(ToolCall)
+            .outerjoin(ConnectorInstallation, ConnectorInstallation.id == ToolCall.installation_id)
+            .where(
+                ToolCall.workspace_id == workspace_id,
+                ToolCall.created_at >= from_,
+                ToolCall.created_at < to_,
+            )
+            .group_by(connector, ToolCall.status)
+            .order_by(connector, ToolCall.status)
+        )
+        rows = await self.session.execute(stmt)
+        return [ToolReliability(connector_key=r[0], status=r[1], calls=r[2]) for r in rows]
 
     async def _require(self, workspace_id: uuid.UUID, id_: uuid.UUID) -> ToolCall:
         call = await self.get(workspace_id, id_)

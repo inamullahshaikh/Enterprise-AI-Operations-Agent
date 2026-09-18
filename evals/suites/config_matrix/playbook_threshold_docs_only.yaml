@@ -1,0 +1,9 @@
+key: config_matrix_playbook_threshold_docs_only
+suite: config_matrix
+connector_profile: docs_only
+message: "According to our renewal playbook, what MRR threshold gets an account a personal check-in email instead of an automated reminder?"
+expectations:
+  route: task
+  must_mention: ["500"]
+  must_call_tools: ["*__search_documents"]
+tags: [config_matrix, playbook_threshold]
